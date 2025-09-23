@@ -3,12 +3,21 @@ import dotenv from 'dotenv';
 import bodyParser from 'body-parser';
 import cors from 'cors';
 import bnplRoutes from './routes/bnplRoutes.js';
+import paylaterStaticRoute from './routes/staticPayLink.js';
+import paylaterWebhook from './webhooks/bnplWebhook.js';
+import shopifyWebhook from './webhooks/shopifyWebhook.js'; 
 
 dotenv.config();
 const app = express();
+
+app.use('/api/webhooks/shopify', express.raw({ type: 'application/json' }));
 app.use(bodyParser.json());
+app.use(cors())
 
 app.use('/api/bnpl', bnplRoutes);
+app.use('/', paylaterStaticRoute);
+app.use('/api/webhooks/paylater', paylaterWebhook);
+app.use('/api/webhooks/shopify', shopifyWebhook);
 
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
