@@ -9,29 +9,29 @@ const router = express.Router();
 router.post('/', async (req, res) => {
   const order = req.body;
   if (!order || !order.id) {
-      console.warn("Invalid Shopify order payload:", order);
-      return res.status(400).send("Invalid payload");
-    }
-    console.log(`Received Shopify order: ${order.id}`);
+    console.warn("Invalid Shopify order payload:", order);
+    return res.status(400).send("Invalid payload");
+  }
+  console.log(`Received Shopify order: ${order.id}`);
 
   const paymentMethod = order.payment_gateway_names?.includes("PayLater – Pay in 4 (0% Interest)");
   if (!paymentMethod) {
-      console.log(`Order ${order.id} is not PayLater. Skipping.`);
-      return res.status(200).send("Not a PayLater order");
-    }
+    console.log(`Order ${order.id} is not PayLater. Skipping.`);
+    return res.status(200).send("Not a PayLater order");
+  }
 
   try {
     const response = await axios.post(`${process.env.SERVER_URL}/api/bnpl/create-order`, {
       orderId: order.id,
       amount: order.total_price,
-      successRedirectUrl: `${process.env.FRONTEND_URL}/success`,
-      failRedirectUrl: `${process.env.FRONTEND_URL}/fail`
+      successRedirectUrl: `${process.env.FRONTEND_URL}/pages/paylater-success`,
+      failRedirectUrl: `${process.env.FRONTEND_URL}/pages/paylater-failed`
     });
 
     const paymentUrl = response.data.paymentUrl;
     console.log(`BNPL payment link for Shopify order ${order.id}: ${paymentUrl}`);
 
-    // ✅ Send email to the customer
+    // Send email to the customer
     const customerEmail = order.email;
     if (customerEmail) {
       await sendPayLaterEmail(customerEmail, order.id, paymentUrl);

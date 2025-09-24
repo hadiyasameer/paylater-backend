@@ -6,22 +6,25 @@ dotenv.config();
 const router = express.Router();
 
 router.post('/', async (req, res) => {
+  console.log("📩 Received webhook body from PayLater:", req.body);
   const { orderId, status, amount } = req.body;
 
-  console.log(`Received PayLater status for order ${orderId}: ${status}`);
+  if (!orderId || !status) {
+    return res.status(400).send("Missing orderId or status");
+  }
 
-  // Only update Shopify if payment is successful
+  console.log(`✅ Received PayLater status for order ${orderId}: ${status}`);
+
   if (status === "paid") {
     try {
-      const SHOPIFY_STORE = process.env.SHOPIFY_STORE; // e.g., midev-store.myshopify.com
+      const SHOPIFY_STORE = process.env.SHOPIFY_STORE;
       const SHOPIFY_ACCESS_TOKEN = process.env.SHOPIFY_ACCESS_TOKEN;
 
-      // Update Shopify order
-      await axios.post(
+      const shopifyResponse = await axios.post(
         `https://${SHOPIFY_STORE}/admin/api/2025-07/orders/${orderId}/transactions.json`,
         {
           transaction: {
-            kind: "capture",
+            kind: "sale",
             status: "success",
             amount: amount
           }
@@ -36,6 +39,8 @@ router.post('/', async (req, res) => {
 
 
       console.log(`Shopify order ${orderId} marked as paid.`);
+      console.log("🛒 Shopify response:", shopifyResponse.data);
+
     } catch (err) {
       console.error("Failed to update Shopify order:", err.response?.data || err.message);
     }

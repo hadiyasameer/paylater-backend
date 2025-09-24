@@ -18,6 +18,7 @@ export const createBnplOrder = async (req, res) => {
     successRedirectUrl,
     failRedirectUrl
   };
+  console.log("👉 Sending to PayLater:", payload);
 
   try {
     const response = await axios.post(
@@ -30,6 +31,7 @@ export const createBnplOrder = async (req, res) => {
         }
       }
     );
+    console.log("✅ PayLater API response:", response.data);
 
     res.json({ paymentUrl: response.data.paymentLinkUrl });
 
