@@ -8,10 +8,17 @@ const router = express.Router();
 
 router.post('/', async (req, res) => {
   const order = req.body;
-  console.log("Received Shopify order:", order.id);
+  if (!order || !order.id) {
+      console.warn("Invalid Shopify order payload:", order);
+      return res.status(400).send("Invalid payload");
+    }
+    console.log(`Received Shopify order: ${order.id}`);
 
   const paymentMethod = order.payment_gateway_names?.includes("PayLater – Pay in 4 (0% Interest)");
-  if (!paymentMethod) return res.status(200).send("Not a PayLater order");
+  if (!paymentMethod) {
+      console.log(`Order ${order.id} is not PayLater. Skipping.`);
+      return res.status(200).send("Not a PayLater order");
+    }
 
   try {
     const response = await axios.post(`${process.env.SERVER_URL}/api/bnpl/create-order`, {

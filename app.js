@@ -1,6 +1,5 @@
 import express from 'express';
 import dotenv from 'dotenv';
-import bodyParser from 'body-parser';
 import cors from 'cors';
 import bnplRoutes from './routes/bnplRoutes.js';
 import paylaterStaticRoute from './routes/staticPayLink.js';
