@@ -7,38 +7,56 @@ const router = express.Router();
 
 router.post('/', async (req, res) => {
   console.log("📩 Received webhook body from PayLater:", req.body);
-  const { orderId, status, amount } = req.body;
+  const { orderId, orderNumber, status, amount } = req.body;
 
-  if (!orderId || !status) {
-    return res.status(400).send("Missing orderId or status");
+  if ((!orderId && !orderNumber) || !status) {
+    return res.status(400).send("Missing orderId/orderNumber or status");
   }
 
-  console.log(`✅ Received PayLater status for order ${orderId}: ${status}`);
+  // Determine Shopify order ID
+  let shopifyOrderId = orderId;
+
+  if (!shopifyOrderId && orderNumber) {
+    try {
+      const response = await axios.get(
+        `https://${process.env.SHOPIFY_STORE}/admin/api/2025-07/orders.json?name=#${orderNumber}`,
+        {
+          headers: { "X-Shopify-Access-Token": process.env.SHOPIFY_ACCESS_TOKEN },
+        }
+      );
+
+      if (response.data.orders.length === 0) {
+        console.warn(`No Shopify order found for order number ${orderNumber}`);
+        return res.status(404).send("Shopify order not found");
+      }
+
+      shopifyOrderId = response.data.orders[0].id;
+    } catch (err) {
+      console.error("Error fetching Shopify order by number:", err.response?.data || err.message);
+      return res.status(500).send("Failed to fetch Shopify order");
+    }
+  }
 
   if (status === "paid") {
     try {
-      const SHOPIFY_STORE = process.env.SHOPIFY_STORE;
-      const SHOPIFY_ACCESS_TOKEN = process.env.SHOPIFY_ACCESS_TOKEN;
-
       const shopifyResponse = await axios.post(
-        `https://${SHOPIFY_STORE}/admin/api/2025-07/orders/${orderId}/transactions.json`,
+        `https://${process.env.SHOPIFY_STORE}/admin/api/2025-07/orders/${shopifyOrderId}/transactions.json`,
         {
           transaction: {
             kind: "capture",
             status: "success",
-            amount: amount
-          }
+            amount: parseFloat(amount).toFixed(2),
+          },
         },
         {
           headers: {
-            "X-Shopify-Access-Token": SHOPIFY_ACCESS_TOKEN,
-            "Content-Type": "application/json"
-          }
+            "X-Shopify-Access-Token": process.env.SHOPIFY_ACCESS_TOKEN,
+            "Content-Type": "application/json",
+          },
         }
       );
 
-
-      console.log(`Shopify order ${orderId} marked as paid.`);
+      console.log(`Shopify order ${shopifyOrderId} marked as paid.`);
       console.log("🛒 Shopify response:", shopifyResponse.data);
 
     } catch (err) {
