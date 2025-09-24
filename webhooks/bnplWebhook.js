@@ -24,7 +24,7 @@ router.post('/', async (req, res) => {
         `https://${SHOPIFY_STORE}/admin/api/2025-07/orders/${orderId}/transactions.json`,
         {
           transaction: {
-            kind: "sale",
+            kind: "capture",
             status: "success",
             amount: amount
           }
