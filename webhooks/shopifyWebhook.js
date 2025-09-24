@@ -1,13 +1,13 @@
 import express from 'express';
 import axios from 'axios';
 import dotenv from 'dotenv';
+import { sendPayLaterEmail } from '../utils/sendEmail.js';
 
 dotenv.config();
 const router = express.Router();
 
-// Shopify raw body parser requires middleware at server level
 router.post('/', async (req, res) => {
-  const order = JSON.parse(req.body.toString()); // convert raw body to JSON
+  const order = JSON.parse(req.body.toString());
   console.log("Received Shopify order:", order.id);
 
   const paymentMethod = order.payment_gateway_names?.includes("PayLater – Pay in 4 (0% Interest)");
@@ -22,29 +22,21 @@ router.post('/', async (req, res) => {
     });
 
     const paymentUrl = response.data.paymentUrl;
-
     console.log(`BNPL payment link for Shopify order ${order.id}: ${paymentUrl}`);
 
-    // Optionally send to customer via Shopify fulfillment message
-    await axios.post(
-      `https://${process.env.SHOPIFY_STORE}/admin/api/2025-07/orders/${order.id}/fulfillments.json`,
-      {
-        fulfillment: {
-          location_id: process.env.SHOPIFY_LOCATION_ID,
-          tracking_numbers: [],
-          notify_customer: true,
-          message: `Complete your payment here: ${paymentUrl}`
-        }
-      },
-      {
-        headers: {
-          "X-Shopify-Access-Token": process.env.SHOPIFY_ACCESS_TOKEN,
-          "Content-Type": "application/json"
-        }
-      }
-    );
+    // ✅ Send email to the customer
+    const customerEmail = order.email;
+    if (customerEmail) {
+      await sendPayLaterEmail(customerEmail, order.id, paymentUrl);
+      console.log(`Email sent to ${customerEmail} with PayLater link.`);
+    } else {
+      console.warn(`No email found for order ${order.id}`);
+    }
 
-    res.status(200).send("PayLater link sent");
+    // Optional: also send via Shopify fulfillment message (your existing code)
+    // OR remove it if email is sufficient
+
+    res.status(200).send("PayLater link sent via email");
 
   } catch (err) {
     console.error(err.response?.data || err.message);
