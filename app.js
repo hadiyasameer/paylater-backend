@@ -9,10 +9,9 @@ import shopifyWebhook from './webhooks/shopifyWebhook.js';
 
 dotenv.config();
 const app = express();
-
-app.use('/api/webhooks/shopify', express.raw({ type: 'application/json' }));
-app.use(bodyParser.json());
 app.use(cors())
+
+app.use(express.json());
 
 app.use('/api/bnpl', bnplRoutes);
 app.use('/', paylaterStaticRoute);

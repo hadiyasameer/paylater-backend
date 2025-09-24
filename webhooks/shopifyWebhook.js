@@ -7,7 +7,7 @@ dotenv.config();
 const router = express.Router();
 
 router.post('/', async (req, res) => {
-  const order = JSON.parse(req.body.toString());
+  const order = req.body;
   console.log("Received Shopify order:", order.id);
 
   const paymentMethod = order.payment_gateway_names?.includes("PayLater – Pay in 4 (0% Interest)");
@@ -33,15 +33,13 @@ router.post('/', async (req, res) => {
       console.warn(`No email found for order ${order.id}`);
     }
 
-    // Optional: also send via Shopify fulfillment message (your existing code)
-    // OR remove it if email is sufficient
-
     res.status(200).send("PayLater link sent via email");
 
   } catch (err) {
     console.error(err.response?.data || err.message);
     res.status(500).send("Failed to create PayLater order");
   }
+
 });
 
 export default router;
