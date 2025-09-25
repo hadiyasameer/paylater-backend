@@ -1,3 +1,4 @@
+// /webhooks/shopifyWebhook.js
 import express from 'express';
 import axios from 'axios';
 import dotenv from 'dotenv';
@@ -14,13 +15,17 @@ router.post('/', async (req, res) => {
   }
   console.log(`Received Shopify order: ${order.id}`);
 
-  const paymentMethod = order.payment_gateway_names?.includes("PayLater – Pay in 4 (0% Interest)");
-  if (!paymentMethod) {
+  // Check if this order uses PayLater
+  const isPayLater = order.payment_gateway_names?.includes("PayLater – Pay in 4 (0% Interest)");
+  if (!isPayLater) {
     console.log(`Order ${order.id} is not PayLater. Skipping.`);
     return res.status(200).send("Not a PayLater order");
   }
 
+  let paymentUrl;
+
   try {
+    // Try to create a new BNPL order
     const response = await axios.post(`${process.env.SERVER_URL}/api/bnpl/create-order`, {
       orderId: order.id,
       amount: order.total_price,
@@ -28,25 +33,40 @@ router.post('/', async (req, res) => {
       failRedirectUrl: `${process.env.FRONTEND_URL}/pages/paylater-failed`
     });
 
-    const paymentUrl = response.data.paymentUrl;
-    console.log(`BNPL payment link for Shopify order ${order.id}: ${paymentUrl}`);
-
-    // Send email to the customer
-    const customerEmail = order.email;
-    if (customerEmail) {
-      await sendPayLaterEmail(customerEmail, order.id, paymentUrl);
-      console.log(`Email sent to ${customerEmail} with PayLater link.`);
-    } else {
-      console.warn(`No email found for order ${order.id}`);
-    }
-
-    res.status(200).send("PayLater link sent via email");
+    paymentUrl = response.data.paymentUrl;
+    console.log(`✅ BNPL payment link for Shopify order ${order.id}: ${paymentUrl}`);
 
   } catch (err) {
-    console.error(err.response?.data || err.message);
-    res.status(500).send("Failed to create PayLater order");
+    // Handle "order already exists" error
+    if (err.response?.data?.message?.includes("already exists")) {
+      console.warn(`Order ${order.id} already exists in PayLater.`);
+      // PayLater sometimes returns the link in the error response
+      paymentUrl = err.response?.data?.paymentLinkUrl;
+      if (!paymentUrl) {
+        // If not, generate a fallback link using your frontend
+        paymentUrl = `${process.env.FRONTEND_URL}/pages/paylater-info?orderId=${order.id}`;
+        console.log(`Using fallback payment link for order ${order.id}: ${paymentUrl}`);
+      }
+    } else {
+      console.error("Failed to create PayLater order:", err.response?.data || err.message);
+      return res.status(500).send("Failed to create PayLater order");
+    }
   }
 
+  // Send email to the customer
+  const customerEmail = order.email;
+  if (customerEmail && paymentUrl) {
+    try {
+      await sendPayLaterEmail(customerEmail, order.id, paymentUrl);
+      console.log(`✉️ Email sent to ${customerEmail} with PayLater link.`);
+    } catch (emailErr) {
+      console.error(`❌ Failed to send email to ${customerEmail}:`, emailErr.message);
+    }
+  } else {
+    console.warn(`No email or payment link available for order ${order.id}`);
+  }
+
+  res.status(200).send("PayLater link handled successfully");
 });
 
 export default router;
