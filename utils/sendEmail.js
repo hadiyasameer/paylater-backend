@@ -4,14 +4,17 @@ dotenv.config();
 
 export const sendPayLaterEmail = async (to, orderId, paymentUrl) => {
   const transporter = nodemailer.createTransport({
-    host: process.env.EMAIL_HOST,
-    port: 465,
-    secure: true,
+    service: 'gmail', 
     auth: {
-      user: process.env.EMAIL_FROM,
-      pass: process.env.EMAIL_PASSWORD,
-    }
+      user: process.env.EMAIL_FROM,        
+      pass: process.env.EMAIL_PASSWORD,    
+    },
+    tls: {
+      rejectUnauthorized: false, 
+    },
+    connectionTimeout: 10000,    
   });
+
 
   const mailOptions = {
     from: `"PayLater Payment" <${process.env.EMAIL_FROM}>`,
