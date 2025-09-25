@@ -9,16 +9,20 @@ export const createBnplOrder = async (req, res) => {
   if (!orderId || !amount || !successRedirectUrl || !failRedirectUrl) {
     return res.status(400).json({ message: "Missing required fields" });
   }
+  // ✅ Make orderId unique by appending timestamp
+  const uniqueOrderId = `${orderId}-${Date.now()}`;
 
   const payload = {
     merchantId: process.env.BNPL_MERCHANT_ID,
     outletId: process.env.BNPL_OUTLET_ID,
     currency: "QAR",
     amount,
-    orderId,
+    orderId: uniqueOrderId,
     successRedirectUrl,
     failRedirectUrl
   };
+
+
 
   console.log("👉 Sending to PayLater:", payload);
 
