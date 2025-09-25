@@ -21,7 +21,7 @@ export const getPayLaterLink = async (req, res) => {
 
   try {
     const response = await axios.post(
-      `${process.env.BNPL_BASE_URL}/paylater/merchant-portal/web-checkout/`,
+      `${process.env.BNPL_BASE_URL}/api/paylater/merchant-portal/web-checkout/`,
       payload,
       {
         headers: {

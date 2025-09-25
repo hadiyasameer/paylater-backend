@@ -44,7 +44,7 @@ router.post('/', async (req, res) => {
         {
           transaction: {
             kind: "capture",
-            status: "success",
+            gateway: "manual",
             amount: parseFloat(amount).toFixed(2),
           },
         },
