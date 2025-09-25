@@ -1,3 +1,4 @@
+// /controllers/bnplController.js
 import axios from 'axios';
 import dotenv from 'dotenv';
 dotenv.config();
@@ -18,6 +19,7 @@ export const createBnplOrder = async (req, res) => {
     successRedirectUrl,
     failRedirectUrl
   };
+
   console.log("👉 Sending to PayLater:", payload);
 
   try {
@@ -31,12 +33,35 @@ export const createBnplOrder = async (req, res) => {
         }
       }
     );
-    console.log("✅ PayLater API response:", response.data);
 
-    res.json({ paymentUrl: response.data.paymentLinkUrl });
+    console.log("✅ PayLater API response:", response.data);
+    return res.json({ paymentUrl: response.data.paymentLinkUrl });
 
   } catch (err) {
+    const errorMsg = err.response?.data?.message || err.message;
+
+    // 👉 Handle duplicate order ID
+    if (errorMsg.includes("Order ID already exists")) {
+      console.warn(`⚠️ Order ID ${orderId} already exists in PayLater system.`);
+
+      // If PayLater returns the existing payment link, return it
+      const existingLink = err.response?.data?.paymentLinkUrl;
+
+      if (existingLink) {
+        return res.json({ paymentUrl: existingLink });
+      }
+
+      // Fallback: generate a frontend link with order ID
+      const fallbackUrl = `${successRedirectUrl}?orderId=${orderId}`;
+      console.log(`⚠️ Using fallback PayLater link: ${fallbackUrl}`);
+      return res.json({ paymentUrl: fallbackUrl });
+    }
+
+    // ❌ If other error, return 500
     console.error("Error creating BNPL order:", err.response?.data || err.message);
-    res.status(500).json({ message: "Failed to create PayLater order", error: err.response?.data || err.message });
+    return res.status(500).json({
+      message: "Failed to create PayLater order",
+      error: err.response?.data || err.message
+    });
   }
 };
