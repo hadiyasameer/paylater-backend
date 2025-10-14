@@ -1,51 +1,61 @@
-import express from 'express';
-import axios from 'axios';
-import dotenv from 'dotenv';
+// webhooks/bnplWebhook.js
+import express from "express";
+import crypto from "crypto";
+import axios from "axios";
+import dotenv from "dotenv";
+import { Merchant } from "../models/merchant.js";
+import { connectDb } from "../utils/db.js";
 
 dotenv.config();
 const router = express.Router();
 
-router.post('/', async (req, res) => {
-  console.log("📩 Received webhook body from PayLater:", req.body);
-  const { orderId, orderNumber, status, amount } = req.body;
+router.post("/", async (req, res) => {
+  console.log("📩 PayLater Webhook Received:", req.body);
+  await connectDb();
 
-  if ((!orderId && !orderNumber) || !status) {
-    return res.status(400).send("Missing orderId/orderNumber or status");
+  const { merchantId, orderId, status, timestamp, txHash, signature, comments } = req.body;
+
+  if (!merchantId || !orderId || !status || !timestamp || !txHash || !signature) {
+    return res.status(400).json({ message: "Missing required fields" });
   }
 
-  // Determine Shopify order ID
-  let shopifyOrderId = orderId;
-
-  if (!shopifyOrderId && orderNumber) {
-    try {
-      const response = await axios.get(
-        `https://${process.env.SHOPIFY_STORE}/admin/api/2025-07/orders.json?name=#${orderNumber}`,
-        {
-          headers: { "X-Shopify-Access-Token": process.env.SHOPIFY_ACCESS_TOKEN },
-        }
-      );
-
-      if (response.data.orders.length === 0) {
-        console.warn(`No Shopify order found for order number ${orderNumber}`);
-        return res.status(404).send("Shopify order not found");
-      }
-
-      shopifyOrderId = response.data.orders[0].id;
-    } catch (err) {
-      console.error("Error fetching Shopify order by number:", err.response?.data || err.message);
-      return res.status(500).send("Failed to fetch Shopify order");
-    }
+  const merchant = await Merchant.findOne({ paylaterMerchantId: merchantId });
+  if (!merchant) {
+    console.warn(`No merchant found for ID ${merchantId}`);
+    return res.status(404).send("Merchant not found");
   }
 
-  if (status === "paid") {
+  // 1️⃣ Verify txHash
+  const dataString = `${merchantId}${orderId}${status}${timestamp}${comments || ""}`.toUpperCase();
+  const computedTxHash = crypto.createHash("md5").update(dataString).digest("hex");
+  if (computedTxHash !== txHash) {
+    console.warn("❌ Invalid txHash");
+    return res.status(403).send("Invalid txHash");
+  }
+
+  // 2️⃣ Verify Signature
+  const computedSignature = crypto
+    .createHmac("sha256", merchant.webhookSecret)
+    .update(txHash)
+    .digest("hex");
+
+  if (computedSignature !== signature) {
+    console.warn("❌ Invalid Signature");
+    return res.status(403).send("Invalid signature");
+  }
+
+  console.log("✅ Webhook verified successfully for order:", orderId);
+
+  // 3️⃣ Update Shopify order if payment succeeded
+  if (status === "success" || status === "paid") {
     try {
       const shopifyResponse = await axios.post(
-        `https://${process.env.SHOPIFY_STORE}/admin/api/2025-07/orders/${shopifyOrderId}/transactions.json`,
+        `https://${process.env.SHOPIFY_STORE}/admin/api/2025-07/orders/${orderId}/transactions.json`,
         {
           transaction: {
             kind: "capture",
-            gateway: "manual",
-            amount: parseFloat(amount).toFixed(2),
+            gateway: "PayLater",
+            amount: req.body.amount || "0.00",
           },
         },
         {
@@ -56,15 +66,14 @@ router.post('/', async (req, res) => {
         }
       );
 
-      console.log(`Shopify order ${shopifyOrderId} marked as paid.`);
-      console.log("🛒 Shopify response:", shopifyResponse.data);
-
+      console.log(`🛍 Shopify order ${orderId} marked as paid`);
+      console.log(shopifyResponse.data);
     } catch (err) {
-      console.error("Failed to update Shopify order:", err.response?.data || err.message);
+      console.error("❌ Shopify update failed:", err.response?.data || err.message);
     }
   }
 
-  res.status(200).send("OK");
+  res.status(200).send("Webhook processed successfully");
 });
 
 export default router;
