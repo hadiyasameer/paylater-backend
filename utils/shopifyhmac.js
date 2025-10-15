@@ -1,4 +1,7 @@
 import crypto from "crypto";
+import dotenv from "dotenv";
+
+dotenv.config();
 
 export const verifyShopifyWebhook = (req, res, next) => {
   const hmacHeader = req.headers["x-shopify-hmac-sha256"];

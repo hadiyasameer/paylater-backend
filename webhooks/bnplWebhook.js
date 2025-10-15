@@ -1,78 +1,50 @@
-// webhooks/bnplWebhook.js
 import express from "express";
 import crypto from "crypto";
-import axios from "axios";
-import dotenv from "dotenv";
-import { Merchant } from "../models/merchant.js";
 import { connectDb } from "../utils/db.js";
+import { Merchant } from "../models/merchant.js";
+import { Order } from "../models/order.js";
 
-dotenv.config();
 const router = express.Router();
 
-router.post("/", async (req, res) => {
-  console.log("📩 PayLater Webhook Received:", req.body);
-  await connectDb();
+const safeEqual = (a, b) => {
+  const ba = Buffer.from(a || "", "utf8");
+  const bb = Buffer.from(b || "", "utf8");
+  if (ba.length !== bb.length) return false;
+  return crypto.timingSafeEqual(ba, bb);
+};
 
+router.post("/", async (req, res) => {
+  await connectDb();
   const { merchantId, orderId, status, timestamp, txHash, signature, comments } = req.body;
 
   if (!merchantId || !orderId || !status || !timestamp || !txHash || !signature) {
     return res.status(400).json({ message: "Missing required fields" });
   }
 
-  const merchant = await Merchant.findOne({ paylaterMerchantId: merchantId });
-  if (!merchant) {
-    console.warn(`No merchant found for ID ${merchantId}`);
-    return res.status(404).send("Merchant not found");
+  const now = Date.now();
+  const tsNum = Number(timestamp);
+  if (!Number.isFinite(tsNum) || Math.abs(now - tsNum) > 5 * 60 * 1000) {
+    return res.status(403).send("Stale or invalid timestamp");
   }
 
-  // 1️⃣ Verify txHash
+  const merchant = await Merchant.findOne({ paylaterMerchantId: merchantId });
+  if (!merchant) return res.status(404).send("Merchant not found");
+
   const dataString = `${merchantId}${orderId}${status}${timestamp}${comments || ""}`.toUpperCase();
   const computedTxHash = crypto.createHash("md5").update(dataString).digest("hex");
-  if (computedTxHash !== txHash) {
-    console.warn("❌ Invalid txHash");
-    return res.status(403).send("Invalid txHash");
-  }
+  if (!safeEqual(computedTxHash, txHash)) return res.status(403).send("Invalid txHash");
 
-  // 2️⃣ Verify Signature
-  const computedSignature = crypto
-    .createHmac("sha256", merchant.webhookSecret)
-    .update(txHash)
-    .digest("hex");
+  const computedSignature = crypto.createHmac("sha256", merchant.webhookSecret).update(txHash).digest("hex");
+  if (!safeEqual(computedSignature, signature)) return res.status(403).send("Invalid signature");
 
-  if (computedSignature !== signature) {
-    console.warn("❌ Invalid Signature");
-    return res.status(403).send("Invalid signature");
-  }
+  const order = await Order.findOne({ paylaterOrderId: orderId, merchantId: merchant._id });
+  if (!order) return res.status(404).send("Order not found");
 
-  console.log("✅ Webhook verified successfully for order:", orderId);
+  const s = String(status).toLowerCase();
+  order.status = (s === "success" || s === "paid") ? "paid" : (s === "failed" ? "failed" : order.status);
+  await order.save();
 
-  // 3️⃣ Update Shopify order if payment succeeded
-  if (status === "success" || status === "paid") {
-    try {
-      const shopifyResponse = await axios.post(
-        `https://${process.env.SHOPIFY_STORE}/admin/api/2025-07/orders/${orderId}/transactions.json`,
-        {
-          transaction: {
-            kind: "capture",
-            gateway: "PayLater",
-            amount: req.body.amount || "0.00",
-          },
-        },
-        {
-          headers: {
-            "X-Shopify-Access-Token": process.env.SHOPIFY_ACCESS_TOKEN,
-            "Content-Type": "application/json",
-          },
-        }
-      );
-
-      console.log(`🛍 Shopify order ${orderId} marked as paid`);
-      console.log(shopifyResponse.data);
-    } catch (err) {
-      console.error("❌ Shopify update failed:", err.response?.data || err.message);
-    }
-  }
-
+  console.log(`✅ Order ${orderId} marked as ${order.status} in DB`);
   res.status(200).send("Webhook processed successfully");
 });
 
