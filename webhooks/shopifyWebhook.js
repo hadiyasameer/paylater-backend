@@ -6,7 +6,7 @@ import { sendPayLaterEmail } from '../utils/sendEmail.js';
 import { connectDb } from '../utils/db.js';
 import { Merchant } from '../models/merchant.js';
 import { Order } from '../models/order.js';
-import { verifyShopifyWebhook } from '../utils/shopifyhmac.js';
+//import { verifyShopifyWebhook } from '../utils/shopifyhmac.js';
 
 dotenv.config();
 const router = express.Router();
@@ -59,7 +59,7 @@ async function ensurePayLaterLinkAndEmail({ shopDomain, shopifyOrderId, amountNu
   return paymentUrl;
 }
 
-router.post('/', verifyShopifyWebhook, async (req, res) => {
+router.post('/', async (req, res) => {
   const shopDomain = req.headers['x-shopify-shop-domain'];
   const topic = req.headers['x-shopify-topic'];
 

@@ -53,6 +53,8 @@ export const createBnplOrder = async (req, res) => {
       }
     );
 
+    console.log("✅ PayLater API response:", response.data);
+
     const paymentUrl = response.data?.paymentLinkUrl;
     if (!paymentUrl) return res.status(502).json({ message: "PayLater API returned no payment link" });
 
@@ -67,7 +69,10 @@ export const createBnplOrder = async (req, res) => {
     }).save();
 
     console.log(`✅ Order ${orderId} saved in DB`);
+    console.log(`🚀 Payment link generated for order ${orderId}: ${paymentUrl}`);
+
     return res.json({ paymentUrl, message: "PayLater order created successfully" });
+
 
   } catch (err) {
     const errorMsg = err.response?.data?.message || err.message;
