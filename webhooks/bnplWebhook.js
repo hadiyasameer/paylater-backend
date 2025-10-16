@@ -31,11 +31,16 @@ router.post("/", async (req, res) => {
   if (!merchant) return res.status(404).send("Merchant not found");
 
   const dataString = `${merchantId}${orderId}${status}${timestamp}${comments || ""}`.toUpperCase();
+  
+  if (process.env.DISABLE_HMAC === "true") {
+  console.log("⚠️ Skipping PayLater signature verification (testing mode)");
+} else {
   const computedTxHash = crypto.createHash("md5").update(dataString).digest("hex");
   if (!safeEqual(computedTxHash, txHash)) return res.status(403).send("Invalid txHash");
 
   const computedSignature = crypto.createHmac("sha256", merchant.webhookSecret).update(txHash).digest("hex");
   if (!safeEqual(computedSignature, signature)) return res.status(403).send("Invalid signature");
+}
 
   const order = await Order.findOne({ paylaterOrderId: orderId, merchantId: merchant._id });
   if (!order) return res.status(404).send("Order not found");
