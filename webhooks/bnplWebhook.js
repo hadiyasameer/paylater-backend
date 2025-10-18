@@ -30,7 +30,7 @@ router.post("/", async (req, res) => {
   const merchant = await Merchant.findOne({ paylaterMerchantId: merchantId });
   if (!merchant) return res.status(404).send("Merchant not found");
 
-  const dataString = `${merchantId}${orderId}${status}${timestamp}${comments || ""}`.toUpperCase();
+const dataString = `${merchantId}${orderId}${status}${timestamp}${(comments||"").trim()}`.toUpperCase();
   
   if (process.env.DISABLE_HMAC === "true") {
   console.log("⚠️ Skipping PayLater signature verification (testing mode)");
