@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+import { encrypt, decrypt } from "../utils/encryption.js";
 
 const merchantSchema = new mongoose.Schema({
   shop: { type: String, unique: true, required: true },
@@ -11,5 +12,25 @@ const merchantSchema = new mongoose.Schema({
   installedAt: { type: Date, default: Date.now }
 });
 
+merchantSchema.pre("save", function(next) {
+  if (this.isModified("accessToken")) this.accessToken = encrypt(this.accessToken);
+  if (this.isModified("paylaterMerchantId")) this.paylaterMerchantId = encrypt(this.paylaterMerchantId);
+  if (this.isModified("paylaterOutletId")) this.paylaterOutletId = encrypt(this.paylaterOutletId);
+  if (this.isModified("webhookSecret")) this.webhookSecret = encrypt(this.webhookSecret);
+  next();
+});
+
+merchantSchema.methods.getDecryptedData = function() {
+  return {
+    shop: this.shop,
+    accessToken: decrypt(this.accessToken),
+    paylaterMerchantId: decrypt(this.paylaterMerchantId),
+    paylaterOutletId: decrypt(this.paylaterOutletId),
+    webhookSecret: decrypt(this.webhookSecret),
+    successUrl: this.successUrl,
+    failUrl: this.failUrl,
+    installedAt: this.installedAt
+  };
+};
 
 export const Merchant = mongoose.models.Merchant || mongoose.model("Merchant", merchantSchema);

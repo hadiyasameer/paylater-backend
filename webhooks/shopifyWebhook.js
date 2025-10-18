@@ -1,3 +1,4 @@
+// /webhooks/shopifyWebhook.js
 import express from 'express';
 import axios from 'axios';
 import dotenv from 'dotenv';
@@ -9,19 +10,22 @@ import { Order } from '../models/order.js';
 dotenv.config();
 const router = express.Router();
 
-async function ensurePayLaterLinkAndEmail({ shopDomain, shopifyOrderId, amountNumber, customerEmail, merchant }) {
+/**
+ * Ensure PayLater link exists and send email if needed
+ */
+async function ensurePayLaterLink({ shopDomain, shopifyOrderId, amountNumber, customerEmail, merchant }) {
   await connectDb();
 
-  let existingOrder = await Order.findOne({
+  let order = await Order.findOne({
     shopifyOrderId: String(shopifyOrderId),
     merchantId: merchant._id,
   });
 
-  let paymentUrl = existingOrder?.paymentLink;
+  let paymentUrl = order?.paymentLink;
 
   if (!paymentUrl) {
     try {
-      const createRes = await axios.post(
+      const response = await axios.post(
         `${process.env.SERVER_URL}/api/bnpl/create-order`,
         {
           orderId: String(shopifyOrderId),
@@ -34,23 +38,39 @@ async function ensurePayLaterLinkAndEmail({ shopDomain, shopifyOrderId, amountNu
         { timeout: 12000 }
       );
 
-      paymentUrl = createRes.data?.paymentUrl;
+      paymentUrl = response.data?.paymentUrl;
+      const paylaterOrderId = response.data?.paylaterOrderId || '';
+
       if (!paymentUrl) throw new Error('BNPL create-order returned no paymentUrl');
 
       console.log(`✅ PayLater link ready for order ${shopifyOrderId}: ${paymentUrl}`);
+
+      if (!order) {
+        order = new Order({
+          shopifyOrderId: String(shopifyOrderId),
+          paylaterOrderId,
+          merchantId: merchant._id,
+          amount: amountNumber,
+          currency: response.data?.currency || 'QAR',
+          paymentLink: paymentUrl,
+          shopifyStatus: 'pending',
+          paylaterStatus: 'pending',
+        });
+      } else {
+        await order.updateStatuses({ paylaterStatus: 'pending' });
+        order.paymentLink = paymentUrl;
+        order.paylaterOrderId = paylaterOrderId;
+      }
+
+      await order.save();
+
+      // Send email if customer email exists
+      if (customerEmail) {
+        await sendPayLaterEmail(String(customerEmail), String(shopifyOrderId), paymentUrl);
+        console.log(`✉️ Email sent to ${customerEmail} for order ${shopifyOrderId}`);
+      }
     } catch (err) {
       console.error(`❌ Failed to create PayLater order for ${shopifyOrderId}:`, err.response?.data || err.message);
-    }
-  } else {
-    console.log(`ℹ️ Reusing existing PayLater link for order ${shopifyOrderId}: ${paymentUrl}`);
-  }
-
-  if (customerEmail && paymentUrl) {
-    try {
-      await sendPayLaterEmail(String(customerEmail), String(shopifyOrderId), paymentUrl);
-      console.log(`✉️ Email sent to ${customerEmail} for order ${shopifyOrderId}`);
-    } catch (emailErr) {
-      console.error(`❌ Failed to send email for order ${shopifyOrderId}: ${emailErr.message}`);
     }
   }
 
@@ -58,71 +78,74 @@ async function ensurePayLaterLinkAndEmail({ shopDomain, shopifyOrderId, amountNu
 }
 
 router.post('/', async (req, res) => {
-  console.log('📥 Shopify webhook hit');
+  console.log('📥 Shopify webhook received');
 
   const shopDomain = req.headers['x-shopify-shop-domain'];
   const topic = req.headers['x-shopify-topic'];
 
-  console.log('🔹 Headers:', { shopDomain, topic });
-
-  if (!shopDomain || !topic) {
-    console.warn('⚠️ Missing required Shopify headers');
-    return res.status(200).send('Ignored: Missing headers');
-  }
+  if (!shopDomain || !topic) return res.status(200).send('Ignored: Missing headers');
 
   await connectDb();
-
   const merchant = await Merchant.findOne({ shop: shopDomain });
-  if (!merchant) {
-    console.warn(`⚠️ Merchant not found for shopDomain: ${shopDomain}`);
-    return res.status(200).send('Ignored: Merchant not found');
-  }
+  if (!merchant) return res.status(200).send('Ignored: Merchant not found');
 
   const payload = req.body;
-  console.log('📝 Payload received:', JSON.stringify(payload, null, 2));
 
   try {
     switch (topic) {
       case 'orders/create':
       case 'checkouts/create': {
         const shopifyOrderId = payload?.id;
-        const totalStr =
-          payload?.current_total_price ??
-          payload?.total_price ??
-          payload?.total_price_set?.shop_money?.amount;
-
-        if (!shopifyOrderId) {
-          console.warn('⚠️ Missing shopifyOrderId in payload');
-          return res.status(200).send('Ignored: Missing order ID');
-        }
-
-        if (!totalStr) {
-          console.warn('⚠️ Missing total price in payload');
-          return res.status(200).send('Ignored: Missing total price');
-        }
+        const totalStr = payload?.current_total_price ?? payload?.total_price ?? payload?.total_price_set?.shop_money?.amount;
+        if (!shopifyOrderId || !totalStr) return res.status(200).send('Ignored: Missing order ID or total price');
 
         const amountNumber = Number(totalStr);
-        if (!Number.isFinite(amountNumber) || amountNumber <= 0) {
-          console.warn('⚠️ Invalid amount:', totalStr);
-          return res.status(200).send('Ignored: Invalid amount');
-        }
+        if (!Number.isFinite(amountNumber) || amountNumber <= 0) return res.status(200).send('Ignored: Invalid amount');
 
         const gatewayNames = payload?.payment_gateway_names || [];
-        const allGateways = [...gatewayNames, ...(payload?.gateway ? [payload.gateway] : [])].map(g =>
-          String(g || '').toLowerCase()
-        );
-
+        const allGateways = [...gatewayNames, ...(payload?.gateway ? [payload.gateway] : [])].map(g => String(g || '').toLowerCase());
         const isPayLater = allGateways.some(g => g.includes('paylater'));
-        if (!isPayLater) {
-          console.log('ℹ️ Not a PayLater order:', allGateways);
-          return res.status(200).send('Not a PayLater order');
-        }
+        if (!isPayLater) return res.status(200).send('Not a PayLater order');
 
         const customerEmail = payload?.email || payload?.customer?.email || payload?.contact_email || null;
 
-        await ensurePayLaterLinkAndEmail({ shopDomain, shopifyOrderId, amountNumber, customerEmail, merchant });
+        const paymentUrl = await ensurePayLaterLink({ shopDomain, shopifyOrderId, amountNumber, customerEmail, merchant });
 
-        console.log(`✅ Shopify webhook processed for order ${shopifyOrderId}`);
+        let order = await Order.findOne({ shopifyOrderId: String(shopifyOrderId), merchantId: merchant._id });
+        if (!order) {
+          order = new Order({
+            shopifyOrderId: String(shopifyOrderId),
+            paylaterOrderId: '', // already handled in ensurePayLaterLink
+            merchantId: merchant._id,
+            amount: amountNumber,
+            currency: 'QAR',
+            paymentLink: paymentUrl || '',
+            shopifyStatus: payload?.financial_status || 'pending',
+            paylaterStatus: 'pending',
+          });
+          await order.save();
+        } else {
+          await order.updateStatuses({
+            shopifyStatus: payload?.financial_status || order.shopifyStatus,
+            paylaterStatus: order.paylaterStatus,
+          });
+        }
+
+        console.log(`✅ Order processed: ${shopifyOrderId}`);
+        return res.status(200).send(`Processed ${topic}`);
+      }
+
+      case 'orders/paid':
+      case 'orders/updated': {
+        const shopifyOrderId = payload?.id;
+        if (!shopifyOrderId) return res.status(200).send('Ignored: Missing order ID');
+
+        const order = await Order.findOne({ shopifyOrderId: String(shopifyOrderId), merchantId: merchant._id });
+        if (order) {
+          await order.updateStatuses({ shopifyStatus: payload?.financial_status || order.shopifyStatus });
+          console.log(`✅ Shopify payment status updated for ${shopifyOrderId}: ${order.shopifyStatus}`);
+        }
+
         return res.status(200).send(`Processed ${topic}`);
       }
 
