@@ -9,7 +9,6 @@ import { Order } from '../models/order.js';
 dotenv.config();
 const router = express.Router();
 
-
 async function ensurePayLaterLink({ shopifyOrderId, amountNumber, customerEmail, merchant }) {
   await connectDb();
 
@@ -18,7 +17,10 @@ async function ensurePayLaterLink({ shopifyOrderId, amountNumber, customerEmail,
     merchantId: merchant._id,
   });
 
-  if (order?.paymentLink) return { paymentUrl: order.paymentLink, paylaterOrderId: order.paylaterOrderId };
+  if (order?.paymentLink) {
+    console.log(`🔁 Existing PayLater link reused for order ${shopifyOrderId}`);
+    return { paymentUrl: order.paymentLink, paylaterOrderId: order.paylaterOrderId };
+  }
 
   try {
     const response = await axios.post(
@@ -26,8 +28,10 @@ async function ensurePayLaterLink({ shopifyOrderId, amountNumber, customerEmail,
       {
         orderId: String(shopifyOrderId),
         amount: amountNumber,
-        successRedirectUrl: merchant.successUrl || `${process.env.FRONTEND_URL}/pages/paylater-success`,
-        failRedirectUrl: merchant.failUrl || `${process.env.FRONTEND_URL}/pages/paylater-failed`,
+        successRedirectUrl:
+          merchant.successUrl || `${process.env.FRONTEND_URL}/pages/paylater-success`,
+        failRedirectUrl:
+          merchant.failUrl || `${process.env.FRONTEND_URL}/pages/paylater-failed`,
         paylaterMerchantId: merchant.paylaterMerchantId,
         outletId: merchant.paylaterOutletId,
       },
@@ -37,7 +41,8 @@ async function ensurePayLaterLink({ shopifyOrderId, amountNumber, customerEmail,
     const paymentUrl = response.data?.paymentUrl;
     const paylaterOrderId = response.data?.paylaterOrderId;
 
-    if (!paymentUrl || !paylaterOrderId) throw new Error('BNPL create-order returned incomplete data');
+    if (!paymentUrl || !paylaterOrderId)
+      throw new Error('BNPL create-order returned incomplete data');
 
     order = await Order.findOneAndUpdate(
       { shopifyOrderId: String(shopifyOrderId), merchantId: merchant._id },
@@ -52,9 +57,6 @@ async function ensurePayLaterLink({ shopifyOrderId, amountNumber, customerEmail,
       { upsert: true, new: true, setDefaultsOnInsert: true }
     );
 
-
-    await order.save();
-
     if (customerEmail) {
       await sendPayLaterEmail(String(customerEmail), String(shopifyOrderId), paymentUrl);
       console.log(`✉️ Email sent to ${customerEmail} for order ${shopifyOrderId}`);
@@ -67,6 +69,7 @@ async function ensurePayLaterLink({ shopifyOrderId, amountNumber, customerEmail,
     return { paymentUrl: null, paylaterOrderId: null };
   }
 }
+
 
 router.post('/', async (req, res) => {
   console.log('📥 Shopify webhook received');
@@ -87,25 +90,39 @@ router.post('/', async (req, res) => {
       case 'orders/create':
       case 'checkouts/create': {
         const shopifyOrderId = payload?.id;
-        const totalStr = payload?.current_total_price ?? payload?.total_price ?? payload?.total_price_set?.shop_money?.amount;
-        if (!shopifyOrderId || !totalStr) return res.status(200).send('Ignored: Missing order ID or total price');
+        const totalStr =
+          payload?.current_total_price ??
+          payload?.total_price ??
+          payload?.total_price_set?.shop_money?.amount;
+
+        if (!shopifyOrderId || !totalStr)
+          return res.status(200).send('Ignored: Missing order ID or total price');
 
         const amountNumber = Number(totalStr);
-        if (!Number.isFinite(amountNumber) || amountNumber <= 0) return res.status(200).send('Ignored: Invalid amount');
+        if (!Number.isFinite(amountNumber) || amountNumber <= 0)
+          return res.status(200).send('Ignored: Invalid amount');
 
         const gatewayNames = payload?.payment_gateway_names || [];
-        const allGateways = [...gatewayNames, ...(payload?.gateway ? [payload.gateway] : [])].map(g => String(g || '').toLowerCase());
-        const isPayLater = allGateways.some(g => g.includes('paylater'));
+        const allGateways = [
+          ...gatewayNames,
+          ...(payload?.gateway ? [payload.gateway] : []),
+        ].map((g) => String(g || '').toLowerCase());
+
+        const isPayLater = allGateways.some((g) => g.includes('paylater'));
         if (!isPayLater) return res.status(200).send('Not a PayLater order');
 
-        const customerEmail = payload?.email || payload?.customer?.email || payload?.contact_email || null;
+        const customerEmail =
+          payload?.email || payload?.customer?.email || payload?.contact_email || null;
 
         res.status(200).send(`Webhook received: ${topic}`);
 
         ensurePayLaterLink({ shopifyOrderId, amountNumber, customerEmail, merchant })
-          .catch(err => console.error('Error in async PayLater processing:', err));
+          .catch((err) => console.error('Error in async PayLater processing:', err));
 
-        const order = await Order.findOne({ shopifyOrderId: String(shopifyOrderId), merchantId: merchant._id });
+        const order = await Order.findOne({
+          shopifyOrderId: String(shopifyOrderId),
+          merchantId: merchant._id,
+        });
         if (order) {
           order.shopifyStatus = payload?.financial_status || order.shopifyStatus;
           await order.save();
@@ -120,11 +137,16 @@ router.post('/', async (req, res) => {
         const shopifyOrderId = payload?.id;
         if (!shopifyOrderId) return res.status(200).send('Ignored: Missing order ID');
 
-        const order = await Order.findOne({ shopifyOrderId: String(shopifyOrderId), merchantId: merchant._id });
+        const order = await Order.findOne({
+          shopifyOrderId: String(shopifyOrderId),
+          merchantId: merchant._id,
+        });
         if (order) {
           order.shopifyStatus = payload?.financial_status || order.shopifyStatus;
           await order.save();
-          console.log(`✅ Shopify payment status updated for ${shopifyOrderId}: ${order.shopifyStatus}`);
+          console.log(
+            `✅ Shopify payment status updated for ${shopifyOrderId}: ${order.shopifyStatus}`
+          );
         }
 
         res.status(200).send(`Webhook received: ${topic}`);
