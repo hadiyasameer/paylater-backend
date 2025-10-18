@@ -9,10 +9,7 @@ import { Order } from '../models/order.js';
 dotenv.config();
 const router = express.Router();
 
-/**
- * Ensure PayLater link exists and send email if needed
- * Runs asynchronously in background
- */
+
 async function ensurePayLaterLink({ shopifyOrderId, amountNumber, customerEmail, merchant }) {
   await connectDb();
 
@@ -21,7 +18,6 @@ async function ensurePayLaterLink({ shopifyOrderId, amountNumber, customerEmail,
     merchantId: merchant._id,
   });
 
-  // If payment link already exists, do nothing
   if (order?.paymentLink) return { paymentUrl: order.paymentLink, paylaterOrderId: order.paylaterOrderId };
 
   try {
@@ -35,7 +31,7 @@ async function ensurePayLaterLink({ shopifyOrderId, amountNumber, customerEmail,
         paylaterMerchantId: merchant.paylaterMerchantId,
         outletId: merchant.paylaterOutletId,
       },
-      { timeout: 10000 } // slightly shorter timeout
+      { timeout: 10000 }
     );
 
     const paymentUrl = response.data?.paymentUrl;
@@ -43,23 +39,19 @@ async function ensurePayLaterLink({ shopifyOrderId, amountNumber, customerEmail,
 
     if (!paymentUrl || !paylaterOrderId) throw new Error('BNPL create-order returned incomplete data');
 
-    // Save or update order
-    if (!order) {
-      order = new Order({
-        shopifyOrderId: String(shopifyOrderId),
+    order = await Order.findOneAndUpdate(
+      { shopifyOrderId: String(shopifyOrderId), merchantId: merchant._id },
+      {
         paylaterOrderId,
-        merchantId: merchant._id,
         amount: amountNumber,
         currency: response.data?.currency || 'QAR',
         paymentLink: paymentUrl,
         shopifyStatus: 'pending',
         paylaterStatus: 'pending',
-      });
-    } else {
-      order.paymentLink = paymentUrl;
-      order.paylaterOrderId = paylaterOrderId;
-      order.paylaterStatus = 'pending';
-    }
+      },
+      { upsert: true, new: true, setDefaultsOnInsert: true }
+    );
+
 
     await order.save();
 
@@ -108,14 +100,11 @@ router.post('/', async (req, res) => {
 
         const customerEmail = payload?.email || payload?.customer?.email || payload?.contact_email || null;
 
-        // Respond immediately to Shopify
         res.status(200).send(`Webhook received: ${topic}`);
 
-        // Process PayLater asynchronously
         ensurePayLaterLink({ shopifyOrderId, amountNumber, customerEmail, merchant })
           .catch(err => console.error('Error in async PayLater processing:', err));
 
-        // Update order Shopify status if already exists
         const order = await Order.findOne({ shopifyOrderId: String(shopifyOrderId), merchantId: merchant._id });
         if (order) {
           order.shopifyStatus = payload?.financial_status || order.shopifyStatus;
