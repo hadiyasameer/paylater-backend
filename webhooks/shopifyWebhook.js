@@ -1,4 +1,3 @@
-// /webhooks/shopifyWebhook.js
 import express from 'express';
 import axios from 'axios';
 import dotenv from 'dotenv';
@@ -6,7 +5,6 @@ import { sendPayLaterEmail } from '../utils/sendEmail.js';
 import { connectDb } from '../utils/db.js';
 import { Merchant } from '../models/merchant.js';
 import { Order } from '../models/order.js';
-//import { verifyShopifyWebhook } from '../utils/shopifyhmac.js';
 
 dotenv.config();
 const router = express.Router();
@@ -60,16 +58,28 @@ async function ensurePayLaterLinkAndEmail({ shopDomain, shopifyOrderId, amountNu
 }
 
 router.post('/', async (req, res) => {
+  console.log('📥 Shopify webhook hit');
+
   const shopDomain = req.headers['x-shopify-shop-domain'];
   const topic = req.headers['x-shopify-topic'];
 
-  if (!shopDomain || !topic) return res.status(200).send('Ignored: Missing headers');
+  console.log('🔹 Headers:', { shopDomain, topic });
+
+  if (!shopDomain || !topic) {
+    console.warn('⚠️ Missing required Shopify headers');
+    return res.status(200).send('Ignored: Missing headers');
+  }
 
   await connectDb();
+
   const merchant = await Merchant.findOne({ shop: shopDomain });
-  if (!merchant) return res.status(200).send('Ignored: Merchant not found');
+  if (!merchant) {
+    console.warn(`⚠️ Merchant not found for shopDomain: ${shopDomain}`);
+    return res.status(200).send('Ignored: Merchant not found');
+  }
 
   const payload = req.body;
+  console.log('📝 Payload received:', JSON.stringify(payload, null, 2));
 
   try {
     switch (topic) {
@@ -81,20 +91,38 @@ router.post('/', async (req, res) => {
           payload?.total_price ??
           payload?.total_price_set?.shop_money?.amount;
 
-        if (!shopifyOrderId || !totalStr) return res.status(200).send('Ignored: Missing order data');
+        if (!shopifyOrderId) {
+          console.warn('⚠️ Missing shopifyOrderId in payload');
+          return res.status(200).send('Ignored: Missing order ID');
+        }
+
+        if (!totalStr) {
+          console.warn('⚠️ Missing total price in payload');
+          return res.status(200).send('Ignored: Missing total price');
+        }
 
         const amountNumber = Number(totalStr);
-        if (!Number.isFinite(amountNumber) || amountNumber <= 0) return res.status(200).send('Ignored: Invalid amount');
+        if (!Number.isFinite(amountNumber) || amountNumber <= 0) {
+          console.warn('⚠️ Invalid amount:', totalStr);
+          return res.status(200).send('Ignored: Invalid amount');
+        }
 
         const gatewayNames = payload?.payment_gateway_names || [];
-        const allGateways = [...gatewayNames, ...(payload?.gateway ? [payload.gateway] : [])].map(g => String(g || '').toLowerCase());
+        const allGateways = [...gatewayNames, ...(payload?.gateway ? [payload.gateway] : [])].map(g =>
+          String(g || '').toLowerCase()
+        );
+
         const isPayLater = allGateways.some(g => g.includes('paylater'));
-        if (!isPayLater) return res.status(200).send('Not a PayLater order');
+        if (!isPayLater) {
+          console.log('ℹ️ Not a PayLater order:', allGateways);
+          return res.status(200).send('Not a PayLater order');
+        }
 
         const customerEmail = payload?.email || payload?.customer?.email || payload?.contact_email || null;
 
         await ensurePayLaterLinkAndEmail({ shopDomain, shopifyOrderId, amountNumber, customerEmail, merchant });
 
+        console.log(`✅ Shopify webhook processed for order ${shopifyOrderId}`);
         return res.status(200).send(`Processed ${topic}`);
       }
 
@@ -103,8 +131,8 @@ router.post('/', async (req, res) => {
         return res.status(200).send('Ignored topic');
     }
   } catch (err) {
-    console.error('❌ Shopify webhook processing error:', err.message);
-    return res.status(200).send('Processed with internal errors');
+    console.error('❌ Shopify webhook processing error:', err);
+    return res.status(500).send('Processed with internal errors');
   }
 });
 
