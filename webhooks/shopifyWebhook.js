@@ -1,4 +1,3 @@
-// /webhooks/shopifyWebhook.js
 import express from 'express';
 import axios from 'axios';
 import dotenv from 'dotenv';
@@ -12,8 +11,9 @@ const router = express.Router();
 
 /**
  * Ensure PayLater link exists and send email if needed
+ * Runs asynchronously in background
  */
-async function ensurePayLaterLink({ shopDomain, shopifyOrderId, amountNumber, customerEmail, merchant }) {
+async function ensurePayLaterLink({ shopifyOrderId, amountNumber, customerEmail, merchant }) {
   await connectDb();
 
   let order = await Order.findOne({
@@ -21,60 +21,59 @@ async function ensurePayLaterLink({ shopDomain, shopifyOrderId, amountNumber, cu
     merchantId: merchant._id,
   });
 
-  let paymentUrl = order?.paymentLink;
+  // If payment link already exists, do nothing
+  if (order?.paymentLink) return { paymentUrl: order.paymentLink, paylaterOrderId: order.paylaterOrderId };
 
-  if (!paymentUrl) {
-    try {
-      const response = await axios.post(
-        `${process.env.SERVER_URL}/api/bnpl/create-order`,
-        {
-          orderId: String(shopifyOrderId),
-          amount: amountNumber,
-          successRedirectUrl: merchant.successUrl || `${process.env.FRONTEND_URL}/pages/paylater-success`,
-          failRedirectUrl: merchant.failUrl || `${process.env.FRONTEND_URL}/pages/paylater-failed`,
-          paylaterMerchantId: merchant.paylaterMerchantId,
-          outletId: merchant.paylaterOutletId,
-        },
-        { timeout: 12000 }
-      );
+  try {
+    const response = await axios.post(
+      `${process.env.SERVER_URL}/api/bnpl/create-order`,
+      {
+        orderId: String(shopifyOrderId),
+        amount: amountNumber,
+        successRedirectUrl: merchant.successUrl || `${process.env.FRONTEND_URL}/pages/paylater-success`,
+        failRedirectUrl: merchant.failUrl || `${process.env.FRONTEND_URL}/pages/paylater-failed`,
+        paylaterMerchantId: merchant.paylaterMerchantId,
+        outletId: merchant.paylaterOutletId,
+      },
+      { timeout: 10000 } // slightly shorter timeout
+    );
 
-      paymentUrl = response.data?.paymentUrl;
-      const paylaterOrderId = response.data?.paylaterOrderId || '';
+    const paymentUrl = response.data?.paymentUrl;
+    const paylaterOrderId = response.data?.paylaterOrderId;
 
-      if (!paymentUrl) throw new Error('BNPL create-order returned no paymentUrl');
+    if (!paymentUrl || !paylaterOrderId) throw new Error('BNPL create-order returned incomplete data');
 
-      console.log(`✅ PayLater link ready for order ${shopifyOrderId}: ${paymentUrl}`);
-
-      if (!order) {
-        order = new Order({
-          shopifyOrderId: String(shopifyOrderId),
-          paylaterOrderId,
-          merchantId: merchant._id,
-          amount: amountNumber,
-          currency: response.data?.currency || 'QAR',
-          paymentLink: paymentUrl,
-          shopifyStatus: 'pending',
-          paylaterStatus: 'pending',
-        });
-      } else {
-        await order.updateStatuses({ paylaterStatus: 'pending' });
-        order.paymentLink = paymentUrl;
-        order.paylaterOrderId = paylaterOrderId;
-      }
-
-      await order.save();
-
-      // Send email if customer email exists
-      if (customerEmail) {
-        await sendPayLaterEmail(String(customerEmail), String(shopifyOrderId), paymentUrl);
-        console.log(`✉️ Email sent to ${customerEmail} for order ${shopifyOrderId}`);
-      }
-    } catch (err) {
-      console.error(`❌ Failed to create PayLater order for ${shopifyOrderId}:`, err.response?.data || err.message);
+    // Save or update order
+    if (!order) {
+      order = new Order({
+        shopifyOrderId: String(shopifyOrderId),
+        paylaterOrderId,
+        merchantId: merchant._id,
+        amount: amountNumber,
+        currency: response.data?.currency || 'QAR',
+        paymentLink: paymentUrl,
+        shopifyStatus: 'pending',
+        paylaterStatus: 'pending',
+      });
+    } else {
+      order.paymentLink = paymentUrl;
+      order.paylaterOrderId = paylaterOrderId;
+      order.paylaterStatus = 'pending';
     }
-  }
 
-  return paymentUrl;
+    await order.save();
+
+    if (customerEmail) {
+      await sendPayLaterEmail(String(customerEmail), String(shopifyOrderId), paymentUrl);
+      console.log(`✉️ Email sent to ${customerEmail} for order ${shopifyOrderId}`);
+    }
+
+    console.log(`✅ PayLater link ready for order ${shopifyOrderId}: ${paymentUrl}`);
+    return { paymentUrl, paylaterOrderId };
+  } catch (err) {
+    console.error(`❌ Failed to create PayLater order for ${shopifyOrderId}:`, err.response?.data || err.message);
+    return { paymentUrl: null, paylaterOrderId: null };
+  }
 }
 
 router.post('/', async (req, res) => {
@@ -109,30 +108,22 @@ router.post('/', async (req, res) => {
 
         const customerEmail = payload?.email || payload?.customer?.email || payload?.contact_email || null;
 
-        const paymentUrl = await ensurePayLaterLink({ shopDomain, shopifyOrderId, amountNumber, customerEmail, merchant });
+        // Respond immediately to Shopify
+        res.status(200).send(`Webhook received: ${topic}`);
 
-        let order = await Order.findOne({ shopifyOrderId: String(shopifyOrderId), merchantId: merchant._id });
-        if (!order) {
-          order = new Order({
-            shopifyOrderId: String(shopifyOrderId),
-            paylaterOrderId: '', // already handled in ensurePayLaterLink
-            merchantId: merchant._id,
-            amount: amountNumber,
-            currency: 'QAR',
-            paymentLink: paymentUrl || '',
-            shopifyStatus: payload?.financial_status || 'pending',
-            paylaterStatus: 'pending',
-          });
+        // Process PayLater asynchronously
+        ensurePayLaterLink({ shopifyOrderId, amountNumber, customerEmail, merchant })
+          .catch(err => console.error('Error in async PayLater processing:', err));
+
+        // Update order Shopify status if already exists
+        const order = await Order.findOne({ shopifyOrderId: String(shopifyOrderId), merchantId: merchant._id });
+        if (order) {
+          order.shopifyStatus = payload?.financial_status || order.shopifyStatus;
           await order.save();
-        } else {
-          await order.updateStatuses({
-            shopifyStatus: payload?.financial_status || order.shopifyStatus,
-            paylaterStatus: order.paylaterStatus,
-          });
         }
 
-        console.log(`✅ Order processed: ${shopifyOrderId}`);
-        return res.status(200).send(`Processed ${topic}`);
+        console.log(`✅ Order processing triggered: ${shopifyOrderId}`);
+        break;
       }
 
       case 'orders/paid':
@@ -142,20 +133,22 @@ router.post('/', async (req, res) => {
 
         const order = await Order.findOne({ shopifyOrderId: String(shopifyOrderId), merchantId: merchant._id });
         if (order) {
-          await order.updateStatuses({ shopifyStatus: payload?.financial_status || order.shopifyStatus });
+          order.shopifyStatus = payload?.financial_status || order.shopifyStatus;
+          await order.save();
           console.log(`✅ Shopify payment status updated for ${shopifyOrderId}: ${order.shopifyStatus}`);
         }
 
-        return res.status(200).send(`Processed ${topic}`);
+        res.status(200).send(`Webhook received: ${topic}`);
+        break;
       }
 
       default:
         console.log(`ℹ️ Ignored Shopify webhook topic: ${topic}`);
-        return res.status(200).send('Ignored topic');
+        res.status(200).send('Ignored topic');
     }
   } catch (err) {
     console.error('❌ Shopify webhook processing error:', err);
-    return res.status(500).send('Processed with internal errors');
+    res.status(500).send('Processed with internal errors');
   }
 });
 

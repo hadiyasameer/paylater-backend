@@ -3,7 +3,9 @@ import { encrypt, decrypt } from "../utils/encryption.js";
 
 const orderSchema = new mongoose.Schema({
   shopifyOrderId: { type: String, required: true, index: true },
-  paylaterOrderId: { type: String, required: true, unique: true, set: encrypt, get: decrypt },
+
+  paylaterOrderId: { type: String, required: true, unique: true, maxlength: 255, set: encrypt, get: decrypt },
+
   merchantId: { type: mongoose.Schema.Types.ObjectId, ref: "Merchant", required: true, index: true },
 
   shopifyStatus: { 
@@ -20,7 +22,7 @@ const orderSchema = new mongoose.Schema({
   amount: { type: Number, required: true },
   currency: { type: String, default: "QAR" },
 
-  paymentLink: { type: String, required: true, set: encrypt, get: decrypt },
+  paymentLink: { type: String, required: true, maxlength: 2000, set: encrypt, get: decrypt },
   paylaterTransactionId: { type: String, set: encrypt, get: decrypt },
   paylaterPaymentDate: { type: Date },
   paylaterComments: { type: String },

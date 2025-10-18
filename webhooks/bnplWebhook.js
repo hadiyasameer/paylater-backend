@@ -3,6 +3,7 @@ import crypto from "crypto";
 import { connectDb } from "../utils/db.js";
 import { Merchant } from "../models/merchant.js";
 import { Order } from "../models/order.js";
+import axios from "axios";
 
 const router = express.Router();
 
@@ -57,6 +58,32 @@ router.post("/", async (req, res) => {
   });
 
   console.log(`✅ Order ${orderId} updated: PayLater status = ${paylaterStatus}`);
+
+  if (paylaterStatus === "paid" && order.shopifyStatus !== "paid") {
+    try {
+      const shopifyAccessToken = merchant.getDecryptedData().accessToken;
+      const shopifyDomain = merchant.shop;
+
+      await axios.post(
+        `https://${shopifyDomain}/admin/api/2025-10/orders/${order.shopifyOrderId}/transactions.json`,
+        {
+          transaction: { kind: "capture", status: "success", amount: order.amount }
+        },
+        {
+          headers: {
+            "X-Shopify-Access-Token": shopifyAccessToken,
+            "Content-Type": "application/json"
+          }
+        }
+      );
+
+      order.shopifyStatus = "paid";
+      await order.save();
+      console.log(`✅ Shopify order ${order.shopifyOrderId} marked as paid`);
+    } catch (err) {
+      console.error(`❌ Failed to update Shopify order ${order.shopifyOrderId}:`, err.response?.data || err.message);
+    }
+  }
 
   res.status(200).send("Webhook processed successfully");
 });

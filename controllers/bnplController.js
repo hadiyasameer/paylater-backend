@@ -6,7 +6,6 @@ import { Merchant } from '../models/merchant.js';
 export const createBnplOrder = async (req, res) => {
   try {
     await connectDb();
-
     const { orderId, amount, successRedirectUrl, failRedirectUrl, paylaterMerchantId, outletId } = req.body;
 
     if (!orderId || !amount || !successRedirectUrl || !failRedirectUrl || !paylaterMerchantId || !outletId) {
@@ -21,20 +20,20 @@ export const createBnplOrder = async (req, res) => {
       return res.status(400).json({ message: "Invalid amount" });
     }
 
-    const existingOrder = await Order.findOne({ shopifyOrderId: String(orderId), merchantId: merchant._id });
-    if (existingOrder) {
-      console.log(`ℹ️ Order ${orderId} already exists, returning existing payment link.`);
-      return res.json({ paymentUrl: existingOrder.paymentLink, message: "Order already exists" });
+    let order = await Order.findOne({ shopifyOrderId: String(orderId), merchantId: merchant._id });
+    if (order) {
+      console.log(`ℹ️ Order ${orderId} already exists`);
+      return res.json({ paymentUrl: order.paymentLink, paylaterOrderId: order.paylaterOrderId, message: "Order already exists" });
     }
 
-    const uniqueOrderId = `${orderId}-${Date.now()}`;
+    const paylaterOrderId = String(orderId);
 
     const payload = {
       merchantId: paylaterMerchantId,
       outletId,
       currency: "QAR",
       amount: parsedAmount,
-      orderId: uniqueOrderId,
+      orderId: paylaterOrderId,
       successRedirectUrl,
       failRedirectUrl
     };
@@ -53,39 +52,29 @@ export const createBnplOrder = async (req, res) => {
       }
     );
 
-    console.log("✅ PayLater API response:", response.data);
-
     const paymentUrl = response.data?.paymentLinkUrl;
     if (!paymentUrl) return res.status(502).json({ message: "PayLater API returned no payment link" });
 
-    await new Order({
+    order = new Order({
       shopifyOrderId: String(orderId),
-      paylaterOrderId: uniqueOrderId,
+      paylaterOrderId,
       merchantId: merchant._id,
-      status: "pending",
+      shopifyStatus: 'pending',
+      paylaterStatus: 'pending',
       amount: parsedAmount,
       currency: "QAR",
       paymentLink: paymentUrl
-    }).save();
+    });
+
+    await order.save();
 
     console.log(`✅ Order ${orderId} saved in DB`);
     console.log(`🚀 Payment link generated for order ${orderId}: ${paymentUrl}`);
 
-    return res.json({ paymentUrl, message: "PayLater order created successfully" });
-
+    return res.json({ paymentUrl, paylaterOrderId, message: "PayLater order created successfully" });
 
   } catch (err) {
-    const errorMsg = err.response?.data?.message || err.message;
-    console.error("❌ Error creating BNPL order:", errorMsg);
-
-    if (errorMsg?.includes("Order ID already exists")) {
-      const existingLink = err.response?.data?.paymentLinkUrl;
-      return res.json({
-        paymentUrl: existingLink || `${req.body.successRedirectUrl}?orderId=${req.body.orderId}`,
-        message: "Order already exists"
-      });
-    }
-
+    console.error("❌ Error creating BNPL order:", err.response?.data || err.message);
     return res.status(500).json({ message: "Failed to create PayLater order", error: err.response?.data || err.message });
   }
 };
