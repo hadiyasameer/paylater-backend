@@ -58,6 +58,7 @@ export const createBnplOrder = async (req, res) => {
 
     const payload = {
       merchantId: paylaterMerchantId,
+      merchant: merchant.shop,
       outletId,
       currency: "QAR",
       amount: parsedAmount,

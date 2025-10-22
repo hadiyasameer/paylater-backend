@@ -63,6 +63,7 @@ export async function createPayLaterOrder({
     shopifyOrderId: String(shopifyOrderId),
     paylaterOrderId: paylaterRef,
     merchantId: merchant._id,
+    merchant: merchant.shop,
     shopifyStatus: 'pending',
     paylaterStatus: 'pending',
     amount: parsedAmount,

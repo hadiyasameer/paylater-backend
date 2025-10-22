@@ -21,28 +21,22 @@ cron.schedule("* * * * *", async () => {
           const merchant = order.merchantId;
           const accessToken = decrypt(merchant.accessToken);
 
-          const orderAge = (now - order.createdAt) / 60000; 
+          const orderAge = (now - order.createdAt) / 60000;
           const cancelTimeLimit = merchant.cancelTimeLimit || order.cancelTimeLimit || 10;
-          const timeLeft = cancelTimeLimit - orderAge;
+          const halfTime = cancelTimeLimit / 2;
+          const timeLeft = Math.ceil(cancelTimeLimit - orderAge);
 
           const email = order.customerEmail || order.email || order?.customer?.email || null;
           const fullname = order.customerName || order?.customer?.name || "Customer";
 
-          const halfTime = cancelTimeLimit / 2;
-
-          if (orderAge >= halfTime && !order.halfTimeReminderSent) {
+          if (!order.halfTimeReminderSent && orderAge >= halfTime && orderAge < cancelTimeLimit) {
             console.log(`📧 Sending half-time reminder for order ${order.shopifyOrderId}`);
-            await sendExpiryWarningEmail({
-              email,
-              fullname,
-              order,
-              cancelTimeLimit: Math.ceil(timeLeft),
-            });
-            order.halfTimeReminderSent = true; 
+            await sendExpiryWarningEmail({ email, fullname, order, cancelTimeLimit: timeLeft });
+            order.halfTimeReminderSent = true;
             await order.save();
           }
 
-          if (orderAge >= cancelTimeLimit && order.paylaterStatus === "pending") {
+          if (!order.cancelled && orderAge >= cancelTimeLimit && order.paylaterStatus === "pending") {
             console.log(`⏰ Auto-cancelling order ${order.shopifyOrderId} (after ${cancelTimeLimit} mins)`);
 
             order.shopifyStatus = "cancelled";
@@ -58,6 +52,7 @@ cron.schedule("* * * * *", async () => {
               }
             }
 
+            order.cancelled = true; 
             await order.save();
 
             if (merchant.shop && accessToken) {
@@ -65,12 +60,7 @@ cron.schedule("* * * * *", async () => {
                 await axios.post(
                   `https://${merchant.shop}/admin/api/2025-10/orders/${order.shopifyOrderId}/cancel.json`,
                   {},
-                  {
-                    headers: {
-                      "X-Shopify-Access-Token": accessToken,
-                      "Content-Type": "application/json",
-                    },
-                  }
+                  { headers: { "X-Shopify-Access-Token": accessToken, "Content-Type": "application/json" } }
                 );
                 console.log(`🛒 Shopify order ${order.shopifyOrderId} cancelled successfully.`);
               } catch (err) {
