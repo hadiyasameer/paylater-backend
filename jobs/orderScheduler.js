@@ -2,8 +2,6 @@ import cron from "node-cron";
 import { connectDb } from "../utils/db.js";
 import { Order } from "../models/order.js";
 import { sendExpiryWarningEmail, sendCancellationEmail } from "../utils/sendEmail.js";
-import { decrypt } from "../utils/encryption.js";
-import axios from "axios";
 
 connectDb().then(() => console.log("✅ Scheduler connected to MongoDB"));
 
@@ -19,7 +17,6 @@ cron.schedule("* * * * *", async () => {
           if (!order.merchantId) return;
 
           const merchant = order.merchantId;
-          const accessToken = decrypt(merchant.accessToken);
 
           const orderAge = (now - order.createdAt) / 60000;
           const cancelTimeLimit = merchant.cancelTimeLimit || order.cancelTimeLimit || 10;
@@ -39,32 +36,16 @@ cron.schedule("* * * * *", async () => {
           if (!order.cancelled && orderAge >= cancelTimeLimit && order.paylaterStatus === "pending") {
             console.log(`⏰ Auto-cancelling order ${order.shopifyOrderId} (after ${cancelTimeLimit} mins)`);
 
-            order.shopifyStatus = "cancelled";
-            order.paylaterStatus = "failed";
+            await order.autoCancel(merchant);
 
             if (!order.cancelEmailSent && email) {
               try {
                 await sendCancellationEmail({ email, fullname, order });
-                console.log(`✉️ Cancellation email sent for order ${order.shopifyOrderId}`);
                 order.cancelEmailSent = true;
+                await order.save();
+                console.log(`✉️ Cancellation email sent for order ${order.shopifyOrderId}`);
               } catch (err) {
                 console.error(`❌ Failed to send cancellation email for ${order.shopifyOrderId}:`, err.response?.data || err.message);
-              }
-            }
-
-            order.cancelled = true; 
-            await order.save();
-
-            if (merchant.shop && accessToken) {
-              try {
-                await axios.post(
-                  `https://${merchant.shop}/admin/api/2025-10/orders/${order.shopifyOrderId}/cancel.json`,
-                  {},
-                  { headers: { "X-Shopify-Access-Token": accessToken, "Content-Type": "application/json" } }
-                );
-                console.log(`🛒 Shopify order ${order.shopifyOrderId} cancelled successfully.`);
-              } catch (err) {
-                console.error(`❌ Failed to cancel Shopify order ${order.shopifyOrderId}:`, err.response?.data || err.message);
               }
             }
           }

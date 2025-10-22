@@ -5,7 +5,7 @@ export const sendPayLaterEmail = async ({ email, fullname, order, cancelTimeLimi
 
 const remainingtime = 
   (cancelTimeLimit !== undefined ? cancelTimeLimit : 
-  order.cancelTimeLimit !== undefined ? order.cancelTimeLimit : 15);
+  order.cancelTimeLimit !== undefined ? order.cancelTimeLimit : 10);
 
   const payload = {
     app_id: process.env.ONESIGNAL_APP_ID,
@@ -53,7 +53,7 @@ export const sendExpiryWarningEmail = async ({ email, fullname, order, cancelTim
 
 const remainingtime = 
   (cancelTimeLimit !== undefined ? cancelTimeLimit : 
-  order.cancelTimeLimit !== undefined ? order.cancelTimeLimit : 15);
+  order.cancelTimeLimit !== undefined ? order.cancelTimeLimit : 10);
 
   const payload = {
     app_id: process.env.ONESIGNAL_APP_ID,

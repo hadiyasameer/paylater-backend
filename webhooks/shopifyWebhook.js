@@ -94,15 +94,21 @@ router.post('/', async (req, res) => {
         const normalizedStatus = normalizeShopifyStatus(payload?.financial_status);
         order.shopifyStatus = normalizedStatus;
 
+        // Updated cancellation logic
         if (normalizedStatus === 'cancelled' && order.paylaterStatus !== 'failed') {
-          order.paylaterStatus = 'failed';
+          await order.autoCancel(merchant);
+
           if (order.customerEmail) {
-            await sendCancellationEmail({
-              email: order.customerEmail,
-              fullname: order.customerName,
-              order
-            });
-            console.log(`✉️ Cancellation email sent for Shopify order ${shopifyOrderId}`);
+            try {
+              await sendCancellationEmail({
+                email: order.customerEmail,
+                fullname: order.customerName,
+                order
+              });
+              console.log(`✉️ Cancellation email sent for Shopify order ${shopifyOrderId}`);
+            } catch (err) {
+              console.error(`❌ Failed to send cancellation email for order ${shopifyOrderId}:`, err.message || err);
+            }
           }
         }
 

@@ -6,7 +6,7 @@ const orderSchema = new mongoose.Schema({
   shopifyOrderId: { type: String, required: true, index: true },
   paylaterOrderId: { type: String, unique: true, maxlength: 255 },
   merchantId: { type: mongoose.Schema.Types.ObjectId, ref: "Merchant", required: true, index: true },
-  merchant:{ type: String, required: true, index: true },
+  merchant: { type: String, required: true, index: true },
   shopifyStatus: { type: String, enum: ["pending", "paid", "fulfilled", "cancelled"], default: "pending" },
   paylaterStatus: { type: String, enum: ["pending", "authorized", "paid", "failed"], default: "pending" },
   amount: { type: Number, required: true },
@@ -38,19 +38,26 @@ orderSchema.methods.updateStatuses = async function({ shopifyStatus, paylaterSta
   await this.save();
 };
 
-orderSchema.methods.autoCancelShopifyOrder = async function() {
+orderSchema.methods.autoCancel = async function(merchant) {
   try {
+    if (!merchant) {
+      console.warn(`❌ Merchant not provided for auto-cancel of order ${this._id}`);
+      return;
+    }
+
+    const { shop, accessToken } = merchant.getDecryptedData ? merchant.getDecryptedData() : { shop: this.shopDomain, accessToken: decrypt(this.accessToken) };
+
     this.shopifyStatus = "cancelled";
     this.paylaterStatus = "failed";
     await this.save();
 
-    if (this.shopDomain && this.accessToken) {
+    if (shop && accessToken && this.shopifyOrderId) {
       await axios.post(
-        `https://${this.shopDomain}/admin/api/2025-01/orders/${this.shopifyOrderId}/cancel.json`,
+        `https://${shop}/admin/api/2025-01/orders/${this.shopifyOrderId}/cancel.json`,
         {},
-        { headers: { "X-Shopify-Access-Token": this.accessToken, "Content-Type": "application/json" } }
+        { headers: { "X-Shopify-Access-Token": accessToken, "Content-Type": "application/json" } }
       );
-      console.log(`🛒 Shopify order ${this.shopifyOrderId} cancelled successfully.`);
+      console.log(`🛑 Shopify order ${this.shopifyOrderId} cancelled successfully.`);
     }
   } catch (err) {
     console.error(`❌ Failed to auto-cancel Shopify order ${this.shopifyOrderId}:`, err.response?.data || err.message);
