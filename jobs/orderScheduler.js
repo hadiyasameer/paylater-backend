@@ -27,11 +27,17 @@ cron.schedule("* * * * *", async () => {
           const fullname = order.customerName || order?.customer?.name || "Customer";
 
           if (!order.halfTimeReminderSent && orderAge >= halfTime && orderAge < cancelTimeLimit) {
-            console.log(`📧 Sending half-time reminder for order ${order.shopifyOrderId}`);
-            await sendExpiryWarningEmail({ email, fullname, order, cancelTimeLimit: timeLeft });
             order.halfTimeReminderSent = true;
-            await order.save();
+            await order.save(); 
+            console.log(`📧 Sending half-time reminder for order ${order.shopifyOrderId}`);
+            try {
+              await sendExpiryWarningEmail({ email, fullname, order, cancelTimeLimit: timeLeft });
+              console.log(`✅ Half-time reminder sent for order ${order.shopifyOrderId}`);
+            } catch (err) {
+              console.error(`❌ Failed to send half-time reminder for ${order.shopifyOrderId}:`, err.message);
+            }
           }
+
 
           if (!order.cancelled && orderAge >= cancelTimeLimit && order.paylaterStatus === "pending") {
             console.log(`⏰ Auto-cancelling order ${order.shopifyOrderId} (after ${cancelTimeLimit} mins)`);
