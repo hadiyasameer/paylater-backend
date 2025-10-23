@@ -58,7 +58,7 @@ const remainingtime =
   const payload = {
     app_id: process.env.ONESIGNAL_APP_ID,
     target_channel: "email",
-    template_id: process.env.ONESIGNAL_TEMPLATE_ID,
+    template_id: process.env.ONESIGNAL_CANCEL_TEMPLATE_ID,
     include_unsubscribed: true,
     include_email_tokens: [email],
     custom_data: {
