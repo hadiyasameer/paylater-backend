@@ -41,6 +41,23 @@ router.get("/cancel", async (req, res) => {
 
     if (merchant.shop && accessToken) {
       try {
+        await axios.post(
+          `https://${merchant.shop}/admin/api/2025-10/orders/${orderId}/cancel.json`,
+          {
+            transaction: {
+              kind: "void",
+              status: "success",
+            },
+          },
+          {
+            headers: {
+              "X-Shopify-Access-Token": accessToken,
+              "Content-Type": "application/json",
+            },
+          }
+        );
+        console.log(`💳 Payment voided for Shopify order ${orderId}`);
+
         const response = await axios.post(
           `https://${merchant.shop}/admin/api/2025-10/orders/${orderId}/cancel.json`,
           {},
