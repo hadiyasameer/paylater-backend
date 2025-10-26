@@ -101,7 +101,7 @@ export const createBnplOrder = async (req, res) => {
       shopifyOrderId: String(orderId),
       paylaterOrderId: paymentId,
       merchantId: merchant._id,
-      merchant:merchant.shop,
+      merchant: merchant.shop,
       shopifyStatus: "pending",
       paylaterStatus: "pending",
       amount: parsedAmount,
@@ -121,7 +121,31 @@ export const createBnplOrder = async (req, res) => {
     console.log(`✅ Order ${orderId} saved in DB`);
     console.log(`🚀 Payment link generated for order ${orderId}`);
 
+  
+    try {
+      const orderIdNumeric = newOrder.shopifyOrderId;
 
+    
+      const existingTags = newOrder.tags ? newOrder.tags.split(",").map(t => t.trim()) : [];
+      const updatedTags = [...new Set([...existingTags, "PayLater"])];
+
+      await axios.put(
+        `https://${shopDomain}/admin/api/2024-07/orders/${orderIdNumeric}.json`,
+        { order: { id: orderIdNumeric, tags: updatedTags.join(", ") } },
+        {
+          headers: {
+            "X-Shopify-Access-Token": accessToken,
+            "Content-Type": "application/json"
+          }
+        }
+      );
+
+      console.log(`✅ "PayLater" tag added to Shopify order ${orderIdNumeric}`);
+    } catch (tagErr) {
+      console.error(`⚠️ Failed to add PayLater tag:`, tagErr.response?.data || tagErr.message);
+    }
+
+   
     if (email) {
       const plainLink = newOrder.toObject().paymentLink;
       await sendPayLaterEmail({
