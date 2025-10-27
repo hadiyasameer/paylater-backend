@@ -14,10 +14,15 @@ const merchantSchema = new mongoose.Schema({
 });
 
 merchantSchema.pre("save", function (next) {
-  if (this.isModified("accessToken")) this.accessToken = encrypt(this.accessToken);
-  if (this.isModified("webhookSecret")) this.webhookSecret = encrypt(this.webhookSecret);
+  if (this.isModified("accessToken") && !this.accessToken.includes(':')) {
+    this.accessToken = encrypt(this.accessToken);
+  }
+  if (this.isModified("webhookSecret") && !this.webhookSecret.includes(':')) {
+    this.webhookSecret = encrypt(this.webhookSecret);
+  }
   next();
 });
+
 
 merchantSchema.methods.getDecryptedData = function () {
   return {

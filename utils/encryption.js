@@ -24,15 +24,26 @@ export function encrypt(text) {
 export function decrypt(data) {
   if (!data) return data;
 
-  const [ivHex, tagHex, encryptedHex] = data.split(':');
-  const iv = Buffer.from(ivHex, 'hex');
-  const tag = Buffer.from(tagHex, 'hex');
-  const encrypted = Buffer.from(encryptedHex, 'hex');
+  const parts = String(data).split(':');
+  if (parts.length !== 3 || parts.some(p => !p)) {
+    return data;
+  }
 
-  const decipher = crypto.createDecipheriv('aes-256-gcm', ENCRYPTION_KEY, iv);
-  decipher.setAuthTag(tag);
-  return decipher.update(encrypted, undefined, 'utf8') + decipher.final('utf8');
+  const [ivHex, tagHex, encryptedHex] = parts;
+  try {
+    const iv = Buffer.from(ivHex, 'hex');
+    const tag = Buffer.from(tagHex, 'hex');
+    const encrypted = Buffer.from(encryptedHex, 'hex');
+
+    const decipher = crypto.createDecipheriv('aes-256-gcm', ENCRYPTION_KEY, iv);
+    decipher.setAuthTag(tag);
+    return decipher.update(encrypted, undefined, 'utf8') + decipher.final('utf8');
+  } catch (err) {
+    console.error('⚠️ Decryption failed:', err.message);
+    return data;
+  }
 }
+
 
 export function generateHmac(message) {
   return crypto.createHmac('sha256', HMAC_SECRET).update(message).digest('hex');

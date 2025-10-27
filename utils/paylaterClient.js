@@ -23,7 +23,7 @@ async function sendPayLaterRequest(payload, retries = 3) {
     } catch (err) {
       lastError = err;
       console.warn(`⚠️ PayLater request attempt ${attempt} failed:`, err.message);
-      if (attempt < retries) await new Promise(res => setTimeout(res, 1000 * attempt)); 
+      if (attempt < retries) await new Promise(res => setTimeout(res, 1000 * attempt));
     }
   }
   console.error('❌ All PayLater API retries failed, fallback triggered', payload);
@@ -118,10 +118,27 @@ export async function createPayLaterOrder({
   }
 
   try {
-    const { data: shopifyOrder } = await axios.get(
+    let shopifyOrder;
+    try {
+      const shopResp = await axios.get(
+        `https://${merchant.shop}/admin/api/2025-10/shop.json`,
+        { headers: { 'X-Shopify-Access-Token': decryptedToken } }
+      );
+      if (!shopResp?.data?.shop?.id) {
+        console.warn(`⚠️ Invalid Shopify access token for ${merchant.shop}, skipping tagging.`);
+        return { paymentUrl, paylaterOrderId: paylaterRef }; 
+      }
+    } catch (verifyErr) {
+      console.warn(`⚠️ Failed to verify Shopify token for ${merchant.shop}:`, verifyErr.response?.data || verifyErr.message);
+      return { paymentUrl, paylaterOrderId: paylaterRef };
+    }
+
+    const { data } = await axios.get(
       `https://${merchant.shop}/admin/api/2025-10/orders/${shopifyOrderId}.json`,
       { headers: { 'X-Shopify-Access-Token': decryptedToken } }
     );
+    shopifyOrder = data;
+
 
     const currentTags = shopifyOrder.order.tags || '';
     const newTags = currentTags.includes('PayLater')
