@@ -70,7 +70,7 @@ export async function createPayLaterOrder({
     paylaterStatus: 'pending',
     amount: parsedAmount,
     currency: 'QAR',
-    paymentLink: encryptedPaymentLink,
+    paymentLink: paymentUrl,
     customerEmail: customerEmail || null,
     customerName: customerName || null
   });

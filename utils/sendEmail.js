@@ -3,9 +3,9 @@ import axios from "axios";
 export const sendPayLaterEmail = async ({ email, fullname, order, cancelTimeLimit }) => {
   if (!email) return console.warn("No customer email provided, skipping email.");
 
-const remainingtime = 
-  (cancelTimeLimit !== undefined ? cancelTimeLimit : 
-  order.cancelTimeLimit !== undefined ? order.cancelTimeLimit : 10);
+  const remainingtime =
+    (cancelTimeLimit !== undefined ? cancelTimeLimit :
+      order.cancelTimeLimit !== undefined ? order.cancelTimeLimit : 10);
 
   const payload = {
     app_id: process.env.ONESIGNAL_APP_ID,
@@ -51,9 +51,9 @@ const remainingtime =
 export const sendExpiryWarningEmail = async ({ email, fullname, order, cancelTimeLimit }) => {
   if (!email) return console.warn("No email provided, skipping expiry warning.");
 
-const remainingtime = 
-  (cancelTimeLimit !== undefined ? cancelTimeLimit : 
-  order.cancelTimeLimit !== undefined ? order.cancelTimeLimit : 10);
+  const remainingtime =
+    (cancelTimeLimit !== undefined ? cancelTimeLimit :
+      order.cancelTimeLimit !== undefined ? order.cancelTimeLimit : 10);
 
   const payload = {
     app_id: process.env.ONESIGNAL_APP_ID,
@@ -109,7 +109,7 @@ export const sendCancellationEmail = async ({ email, fullname, order }) => {
       order: {
         orderid: order.paylaterOrderId,
         merchantname: order.merchant,
-        date: order.date,
+        date: order.date || order.createdAt?.toLocaleString('en-US', { timeZone: 'Asia/Qatar' }),
         amount: order.amount,
         currency: order.currency,
         remainingtime: 0,
