@@ -21,19 +21,12 @@ export const createBnplOrder = async (req, res) => {
       accessToken
     } = req.body;
 
-    if (
-      !orderId ||
-      !amount ||
-      !successRedirectUrl ||
-      !paylaterMerchantId ||
-      !outletId
-    ) {
+    if (!orderId || !amount || !successRedirectUrl || !paylaterMerchantId || !outletId) {
       return res.status(400).json({ message: "Missing required fields" });
     }
 
     const merchant = await Merchant.findOne({ paylaterMerchantId });
-    if (!merchant)
-      return res.status(404).json({ message: "Unknown merchant" });
+    if (!merchant) return res.status(404).json({ message: "Unknown merchant" });
 
     const cancelTimeLimit = merchant.cancelTimeLimit || 10;
     const parsedAmount = parseFloat(amount);
@@ -85,14 +78,12 @@ export const createBnplOrder = async (req, res) => {
     const paymentId = response.data?.paylaterRef || orderId;
 
     if (!paymentUrl) {
-      return res
-        .status(502)
-        .json({ message: "PayLater API returned no payment link" });
+      return res.status(502).json({ message: "PayLater API returned no payment link" });
     }
 
     const encryptedPaymentUrl = encrypt(paymentUrl);
-
     const customerEmail = email || "unknown@example.com";
+
     if (customerEmail === "unknown@example.com") {
       console.warn(`⚠️ Warning: No customer email provided for order ${orderId}`);
     }
@@ -121,31 +112,6 @@ export const createBnplOrder = async (req, res) => {
     console.log(`✅ Order ${orderId} saved in DB`);
     console.log(`🚀 Payment link generated for order ${orderId}`);
 
-  
-    try {
-      const orderIdNumeric = newOrder.shopifyOrderId;
-
-    
-      const existingTags = newOrder.tags ? newOrder.tags.split(",").map(t => t.trim()) : [];
-      const updatedTags = [...new Set([...existingTags, "PayLater"])];
-
-      await axios.put(
-        `https://${shopDomain}/admin/api/2024-07/orders/${orderIdNumeric}.json`,
-        { order: { id: orderIdNumeric, tags: updatedTags.join(", ") } },
-        {
-          headers: {
-            "X-Shopify-Access-Token": accessToken,
-            "Content-Type": "application/json"
-          }
-        }
-      );
-
-      console.log(`✅ "PayLater" tag added to Shopify order ${orderIdNumeric}`);
-    } catch (tagErr) {
-      console.error(`⚠️ Failed to add PayLater tag:`, tagErr.response?.data || tagErr.message);
-    }
-
-   
     if (email) {
       const plainLink = newOrder.toObject().paymentLink;
       await sendPayLaterEmail({
@@ -162,11 +128,48 @@ export const createBnplOrder = async (req, res) => {
       });
     }
 
+    try {
+      console.log(`💡 Adding 'PayLater' tag to Shopify order ${orderId}...`);
+
+      const { data: orderData } = await axios.get(
+        `https://${shopDomain}/admin/api/2025-10/orders/${orderId}.json`,
+        {
+          headers: {
+            "X-Shopify-Access-Token": accessToken,
+            "Content-Type": "application/json"
+          }
+        }
+      );
+
+      const currentTags = orderData.order.tags || "";
+      const newTags = currentTags.includes("PayLater")
+        ? currentTags
+        : currentTags
+          ? `${currentTags}, PayLater`
+          : "PayLater";
+
+      const tagResponse = await axios.put(
+        `https://${shopDomain}/admin/api/2025-10/orders/${orderId}.json`,
+        { order: { id: Number(orderId), tags: newTags } },
+        {
+          headers: {
+            "X-Shopify-Access-Token": accessToken,
+            "Content-Type": "application/json"
+          }
+        }
+      );
+
+      console.log("✅ Shopify tag update response:", tagResponse.data);
+    } catch (tagErr) {
+      console.error("⚠️ Failed to add PayLater tag:", tagErr.response?.data || tagErr.message);
+    }
+
+
     res.json({
       paymentUrl,
       paylaterOrderId: paymentId,
       message:
-        "PayLater order created successfully. Expiry warning and auto-cancel will be handled by cron."
+        "PayLater order created successfully and tagged in Shopify. Expiry warning and auto-cancel will be handled by cron."
     });
   } catch (err) {
     console.error("❌ Error creating BNPL order:", err.message);
