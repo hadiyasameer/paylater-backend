@@ -6,6 +6,7 @@ const merchantSchema = new mongoose.Schema({
   accessToken: { type: String, required: true },
   paylaterMerchantId: { type: String, required: true },
   paylaterOutletId: { type: String, required: true },
+  paylaterApiKey: { type: String },             // add
   webhookSecret: { type: String, required: true },
   successUrl: { type: String, default: "" },
   failUrl: { type: String, default: "" },
@@ -14,26 +15,30 @@ const merchantSchema = new mongoose.Schema({
 });
 
 merchantSchema.pre("save", function (next) {
-  if (this.isModified("accessToken") && !this.accessToken.includes(':')) {
+  if (this.isModified("accessToken") && !this.accessToken.includes(":")) {
     this.accessToken = encrypt(this.accessToken);
   }
-  if (this.isModified("webhookSecret") && !this.webhookSecret.includes(':')) {
+  if (this.isModified("paylaterApiKey") && this.paylaterApiKey && !this.paylaterApiKey.includes(":")) {
+    this.paylaterApiKey = encrypt(this.paylaterApiKey);
+  }
+  if (this.isModified("webhookSecret") && !this.webhookSecret.includes(":")) {
     this.webhookSecret = encrypt(this.webhookSecret);
   }
   next();
 });
 
-
 merchantSchema.methods.getDecryptedData = function () {
   return {
     shop: this.shop,
     accessToken: decrypt(this.accessToken),
+    paylaterApiKey: this.paylaterApiKey ? decrypt(this.paylaterApiKey) : null,
     webhookSecret: decrypt(this.webhookSecret),
     successUrl: this.successUrl,
     failUrl: this.failUrl,
     installedAt: this.installedAt,
-    cancelTimeLimit: this.cancelTimeLimit, 
+    cancelTimeLimit: this.cancelTimeLimit,
   };
 };
+
 
 export const Merchant = mongoose.models.Merchant || mongoose.model("Merchant", merchantSchema);

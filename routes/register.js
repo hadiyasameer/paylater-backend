@@ -18,7 +18,7 @@ router.post('/', async (req, res) => {
       webhookSecret,
     } = req.body;
 
-    if (!shop || !accessToken || !paylaterMerchantId || !paylaterOutletId || !paylaterApiKey) {
+    if (!shop || !accessToken || !paylaterMerchantId || !paylaterOutletId || !paylaterApiKey || !webhookSecret) {
       return res.status(400).json({
         message: 'Missing required fields. Make sure paylaterApiKey is included.'
       });

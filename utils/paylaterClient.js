@@ -8,16 +8,19 @@ const bnplApi = axios.create({
   baseURL: process.env.BNPL_BASE_URL,
   timeout: 10000,
   headers: {
-    'x-api-key': process.env.BNPL_API_KEY,
     'Content-Type': 'application/json'
   }
 });
 
-async function sendPayLaterRequest(payload, retries = 3) {
+async function sendPayLaterRequest(payload, retries = 3, xApiKey) {
   let lastError;
   for (let attempt = 1; attempt <= retries; attempt++) {
     try {
-      const response = await bnplApi.post('/api/paylater/merchant-portal/web-checkout/', payload);
+      const response = await bnplApi.post(
+        '/api/paylater/merchant-portal/web-checkout/',
+        payload,
+        { headers: { 'x-api-key': xApiKey } }
+      );
       if (!response.data?.paymentLinkUrl) throw new Error('No payment link returned');
       return response.data;
     } catch (err) {
@@ -43,7 +46,8 @@ export async function createPayLaterOrder({
   const merchant = await Merchant.findOne({ paylaterMerchantId });
   if (!merchant) throw new Error('Unknown merchant');
 
-  const { accessToken: decryptedToken } = merchant.getDecryptedData();
+  const { accessToken: decryptedToken, paylaterApiKey } = merchant.getDecryptedData();
+  const xApiKey = paylaterApiKey || process.env.BNPL_API_KEY;
 
   const parsedAmount = parseFloat(amount);
   if (isNaN(parsedAmount) || parsedAmount <= 0) throw new Error('Invalid amount');
@@ -70,7 +74,7 @@ export async function createPayLaterOrder({
 
   let responseData;
   try {
-    responseData = await sendPayLaterRequest(payload, 3);
+    responseData = await sendPayLaterRequest(payload, 3, xApiKey);
   } catch (err) {
     console.error('❌ Failed to create PayLater order after retries:', err.message);
     throw err;
@@ -126,7 +130,7 @@ export async function createPayLaterOrder({
       );
       if (!shopResp?.data?.shop?.id) {
         console.warn(`⚠️ Invalid Shopify access token for ${merchant.shop}, skipping tagging.`);
-        return { paymentUrl, paylaterOrderId: paylaterRef }; 
+        return { paymentUrl, paylaterOrderId: paylaterRef };
       }
     } catch (verifyErr) {
       console.warn(`⚠️ Failed to verify Shopify token for ${merchant.shop}:`, verifyErr.response?.data || verifyErr.message);

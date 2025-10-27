@@ -15,6 +15,11 @@ export const getPayLaterLink = async (req, res) => {
     const merchant = await Merchant.findOne({ shop });
     if (!merchant) return res.status(404).json({ message: "Merchant not found" });
 
+    const { paylaterApiKey } = merchant.getDecryptedData();
+    if (!paylaterApiKey) {
+      return res.status(400).json({ message: "Merchant BNPL API key missing" });
+    }
+
     const failRedirectUrl = `${process.env.SERVER_URL}/api/paylater/cancel?orderId=${order_id}`;
     const successRedirectUrl = merchant.successUrl || `${process.env.FRONTEND_URL}/pages/paylater-success`;
 
@@ -33,7 +38,7 @@ export const getPayLaterLink = async (req, res) => {
       payload,
       {
         headers: {
-          'x-api-key': process.env.BNPL_API_KEY,
+          'x-api-key': paylaterApiKey,
           'Content-Type': 'application/json'
         },
         timeout: 12000

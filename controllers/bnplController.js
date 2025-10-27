@@ -18,7 +18,6 @@ export const createBnplOrder = async (req, res) => {
       email,
       fullname,
       shopDomain,
-      accessToken
     } = req.body;
 
     if (
@@ -34,6 +33,11 @@ export const createBnplOrder = async (req, res) => {
     const merchant = await Merchant.findOne({ paylaterMerchantId });
     if (!merchant)
       return res.status(404).json({ message: "Unknown merchant" });
+
+    const { paylaterApiKey } = merchant.getDecryptedData();
+    if (!paylaterApiKey) {
+      return res.status(400).json({ message: "Merchant BNPL API key missing" });
+    }
 
     const cancelTimeLimit = merchant.cancelTimeLimit || 10;
     const parsedAmount = parseFloat(amount);
@@ -74,7 +78,7 @@ export const createBnplOrder = async (req, res) => {
       payload,
       {
         headers: {
-          "x-api-key": process.env.BNPL_API_KEY,
+          "x-api-key": paylaterApiKey,
           "Content-Type": "application/json"
         },
         timeout: 10000
@@ -101,7 +105,7 @@ export const createBnplOrder = async (req, res) => {
       shopifyOrderId: String(orderId),
       paylaterOrderId: paymentId,
       merchantId: merchant._id,
-      merchant:merchant.shop,
+      merchant: merchant.shop,
       shopifyStatus: "pending",
       paylaterStatus: "pending",
       amount: parsedAmount,
@@ -112,7 +116,6 @@ export const createBnplOrder = async (req, res) => {
       customerEmail,
       customerName: fullname || null,
       shopDomain,
-      accessToken,
       warningSent: false
     });
 
