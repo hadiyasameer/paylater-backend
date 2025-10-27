@@ -5,24 +5,41 @@ dotenv.config();
 if (!process.env.ENCRYPTION_KEY || process.env.ENCRYPTION_KEY.length !== 64) {
   throw new Error('ENCRYPTION_KEY must be a 64-character hex string (32 bytes)');
 }
-const ENCRYPTION_KEY = Buffer.from(process.env.ENCRYPTION_KEY, 'hex'); 
-const IV_LENGTH = 16;
+
+const ENCRYPTION_KEY = Buffer.from(process.env.ENCRYPTION_KEY, 'hex');
+const IV_LENGTH = 12; 
+const HMAC_SECRET = Buffer.from(process.env.HMAC_SECRET || '', 'hex'); 
 
 export function encrypt(text) {
   if (!text) return text;
+
   const iv = crypto.randomBytes(IV_LENGTH);
-  const cipher = crypto.createCipheriv('aes-256-cbc', ENCRYPTION_KEY, iv);
-  let encrypted = cipher.update(text, 'utf8', 'hex');
-  encrypted += cipher.final('hex');
-  return iv.toString('hex') + ':' + encrypted;
+  const cipher = crypto.createCipheriv('aes-256-gcm', ENCRYPTION_KEY, iv);
+  const encrypted = Buffer.concat([cipher.update(text, 'utf8'), cipher.final()]);
+  const tag = cipher.getAuthTag();
+
+  return `${iv.toString('hex')}:${tag.toString('hex')}:${encrypted.toString('hex')}`;
 }
 
-export function decrypt(text) {
-  if (!text) return text;
-  const [ivHex, encryptedData] = text.split(':');
+export function decrypt(data) {
+  if (!data) return data;
+
+  const [ivHex, tagHex, encryptedHex] = data.split(':');
   const iv = Buffer.from(ivHex, 'hex');
-  const decipher = crypto.createDecipheriv('aes-256-cbc', ENCRYPTION_KEY, iv);
-  let decrypted = decipher.update(encryptedData, 'hex', 'utf8');
-  decrypted += decipher.final('utf8');
-  return decrypted;
+  const tag = Buffer.from(tagHex, 'hex');
+  const encrypted = Buffer.from(encryptedHex, 'hex');
+
+  const decipher = crypto.createDecipheriv('aes-256-gcm', ENCRYPTION_KEY, iv);
+  decipher.setAuthTag(tag);
+  return decipher.update(encrypted, undefined, 'utf8') + decipher.final('utf8');
+}
+
+export function generateHmac(message) {
+  return crypto.createHmac('sha256', HMAC_SECRET).update(message).digest('hex');
+}
+
+export function verifyHmac(message, signature) {
+  if (!signature) return false;
+  const computed = generateHmac(message);
+  return crypto.timingSafeEqual(Buffer.from(computed, 'hex'), Buffer.from(signature, 'hex'));
 }

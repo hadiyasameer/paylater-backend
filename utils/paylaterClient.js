@@ -4,6 +4,32 @@ import { Merchant } from '../models/merchant.js';
 import { sendPayLaterEmail } from './sendEmail.js';
 import { encrypt, decrypt } from '../utils/encryption.js';
 
+const bnplApi = axios.create({
+  baseURL: process.env.BNPL_BASE_URL,
+  timeout: 10000,
+  headers: {
+    'x-api-key': process.env.BNPL_API_KEY,
+    'Content-Type': 'application/json'
+  }
+});
+
+async function sendPayLaterRequest(payload, retries = 3) {
+  let lastError;
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      const response = await bnplApi.post('/api/paylater/merchant-portal/web-checkout/', payload);
+      if (!response.data?.paymentLinkUrl) throw new Error('No payment link returned');
+      return response.data;
+    } catch (err) {
+      lastError = err;
+      console.warn(`⚠️ PayLater request attempt ${attempt} failed:`, err.message);
+      if (attempt < retries) await new Promise(res => setTimeout(res, 1000 * attempt)); 
+    }
+  }
+  console.error('❌ All PayLater API retries failed, fallback triggered', payload);
+  throw lastError;
+}
+
 export async function createPayLaterOrder({
   shopifyOrderId,
   amount,
@@ -30,7 +56,6 @@ export async function createPayLaterOrder({
   }
 
   const uniqueOrderId = String(shopifyOrderId);
-
   const payload = {
     merchantId: paylaterMerchantId,
     outletId,
@@ -43,23 +68,17 @@ export async function createPayLaterOrder({
 
   console.log('👉 Sending PayLater request:', payload);
 
-  const response = await axios.post(
-    `${process.env.BNPL_BASE_URL}/api/paylater/merchant-portal/web-checkout/`,
-    payload,
-    {
-      headers: {
-        'x-api-key': process.env.BNPL_API_KEY,
-        'Content-Type': 'application/json'
-      },
-      timeout: 10000
-    }
-  );
+  let responseData;
+  try {
+    responseData = await sendPayLaterRequest(payload, 3);
+  } catch (err) {
+    console.error('❌ Failed to create PayLater order after retries:', err.message);
+    throw err;
+  }
 
-  const paymentUrl = response.data?.paymentLinkUrl;
-  const paylaterRef = response.data?.paylaterRef || uniqueOrderId;
+  const paymentUrl = responseData.paymentLinkUrl;
+  const paylaterRef = responseData.paylaterRef || uniqueOrderId;
   if (!paymentUrl) throw new Error('PayLater API returned no payment link');
-
-  const encryptedPaymentLink = encrypt(paymentUrl);
 
   order = new Order({
     shopifyOrderId: uniqueOrderId,
@@ -70,29 +89,27 @@ export async function createPayLaterOrder({
     paylaterStatus: 'pending',
     amount: parsedAmount,
     currency: 'QAR',
-    paymentLink: paymentUrl,
-    customerEmail: customerEmail || null,
-    customerName: customerName || null
+    paymentLink: encrypt(paymentUrl),
+    customerEmail,
+    customerName
   });
 
   await order.save();
   console.log(`✅ PayLater order saved in DB for Shopify order ${shopifyOrderId}`);
-
-  const orderData = {
-    paylaterOrderId: paylaterRef,
-    merchant: merchant.shop,
-    date: new Date().toLocaleString('en-US', { timeZone: 'Asia/Qatar' }),
-    amount: parsedAmount,
-    currency: 'QAR',
-    paymentlink: paymentUrl
-  };
 
   if (customerEmail) {
     try {
       await sendPayLaterEmail({
         email: customerEmail,
         fullname: customerName || customerEmail,
-        order: orderData
+        order: {
+          paylaterOrderId: paylaterRef,
+          merchant: merchant.shop,
+          date: new Date().toLocaleString('en-US', { timeZone: 'Asia/Qatar' }),
+          amount: parsedAmount,
+          currency: 'QAR',
+          paymentlink: paymentUrl
+        }
       });
       console.log(`✉️ PayLater email sent to ${customerEmail} for order ${shopifyOrderId}`);
     } catch (err) {
@@ -100,40 +117,27 @@ export async function createPayLaterOrder({
     }
   }
 
-  console.log(`🚀 PayLater link ready for order ${shopifyOrderId}: ${paymentUrl} (ref ${paylaterRef})`);
-
   try {
-    console.log(`💡 Adding 'PayLater' tag to Shopify order ${shopifyOrderId}...`);
-
-    const { data: orderDataFromShopify } = await axios.get(
+    const { data: shopifyOrder } = await axios.get(
       `https://${merchant.shop}/admin/api/2025-10/orders/${shopifyOrderId}.json`,
-      {
-        headers: {
-          'X-Shopify-Access-Token': decryptedToken,
-          'Content-Type': 'application/json'
-        }
-      }
+      { headers: { 'X-Shopify-Access-Token': decryptedToken } }
     );
 
-    const currentTags = orderDataFromShopify.order.tags || '';
+    const currentTags = shopifyOrder.order.tags || '';
     const newTags = currentTags.includes('PayLater')
       ? currentTags
       : currentTags
         ? `${currentTags}, PayLater`
         : 'PayLater';
 
-    const tagResponse = await axios.put(
-      `https://${merchant.shop}/admin/api/2025-10/orders/${shopifyOrderId}.json`,
-      { order: { id: shopifyOrderId, tags: newTags } },
-      {
-        headers: {
-          'X-Shopify-Access-Token': decryptedToken,
-          'Content-Type': 'application/json'
-        }
-      }
-    );
-
-    console.log('✅ Shopify tag update success:', tagResponse.data.order.tags);
+    if (newTags !== currentTags) {
+      await axios.put(
+        `https://${merchant.shop}/admin/api/2025-10/orders/${shopifyOrderId}.json`,
+        { order: { id: shopifyOrderId, tags: newTags } },
+        { headers: { 'X-Shopify-Access-Token': decryptedToken } }
+      );
+      console.log(`✅ Shopify tag 'PayLater' added for order ${shopifyOrderId}`);
+    }
   } catch (tagErr) {
     console.error('⚠️ Failed to add PayLater tag:', tagErr.response?.data || tagErr.message);
   }

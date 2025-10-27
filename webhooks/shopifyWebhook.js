@@ -4,17 +4,9 @@ import { Order } from '../models/order.js';
 import ensurePayLaterLink from '../utils/ensurePayLaterLinks.js';
 import { connectDb } from '../utils/db.js';
 import { sendCancellationEmail } from '../utils/sendEmail.js';
+import { normalizeShopifyStatus } from '../utils/status.js';
 
 const router = express.Router();
-
-const normalizeShopifyStatus = (status) => {
-  if (!status) return 'pending';
-  const s = String(status).toLowerCase();
-  if (s === 'paid' || s === 'partially_paid') return 'paid';
-  if (s === 'voided' || s === 'refunded' || s === 'cancelled') return 'cancelled';
-  if (s === 'fulfilled') return 'fulfilled';
-  return 'pending';
-};
 
 router.post('/', async (req, res) => {
   const shopDomain = req.headers['x-shopify-shop-domain'];
@@ -42,7 +34,8 @@ router.post('/', async (req, res) => {
         if (!shopifyOrderId || !totalStr) return res.status(200).send('Ignored: Missing order ID or total price');
 
         const amountNumber = Number(totalStr);
-        if (!Number.isFinite(amountNumber) || amountNumber <= 0) return res.status(200).send('Ignored: Invalid amount');
+        if (!Number.isFinite(amountNumber) || amountNumber <= 0)
+          return res.status(200).send('Ignored: Invalid amount');
 
         const gatewayNames = payload?.payment_gateway_names || [];
         const allGateways = [...gatewayNames, ...(payload?.gateway ? [payload.gateway] : [])].map(g =>
@@ -52,7 +45,6 @@ router.post('/', async (req, res) => {
         if (!isPayLater) return res.status(200).send('Not a PayLater order');
 
         const customerEmail = payload?.email || payload?.customer?.email || payload?.contact_email || null;
-
         const customerName =
           payload?.customer?.first_name && payload?.customer?.last_name
             ? `${payload.customer.first_name} ${payload.customer.last_name}`
@@ -69,6 +61,7 @@ router.post('/', async (req, res) => {
               shopifyOrderId,
               amountNumber,
               customerEmail,
+              customerName,
               merchant
             });
 
@@ -78,7 +71,6 @@ router.post('/', async (req, res) => {
                 { customerName },
                 { new: true }
               );
-
               console.log(`✅ PayLater link created for order ${shopifyOrderId}: ${paymentUrl}`);
             } else {
               console.error(`❌ Failed to create PayLater link for ${shopifyOrderId}`);
@@ -112,7 +104,7 @@ router.post('/', async (req, res) => {
             try {
               await sendCancellationEmail({
                 email: order.customerEmail,
-                fullname: order.customerName || order.customerEmail, 
+                fullname: order.customerName || order.customerEmail,
                 order
               });
               console.log(`✉️ Cancellation email sent for Shopify order ${shopifyOrderId}`);
