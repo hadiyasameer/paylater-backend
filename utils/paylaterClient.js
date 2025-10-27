@@ -17,6 +17,8 @@ export async function createPayLaterOrder({
   const merchant = await Merchant.findOne({ paylaterMerchantId });
   if (!merchant) throw new Error('Unknown merchant');
 
+  const { accessToken: decryptedToken } = merchant.getDecryptedData();
+
   const parsedAmount = parseFloat(amount);
   if (isNaN(parsedAmount) || parsedAmount <= 0) throw new Error('Invalid amount');
 
@@ -60,7 +62,7 @@ export async function createPayLaterOrder({
   const encryptedPaymentLink = encrypt(paymentUrl);
 
   order = new Order({
-    shopifyOrderId: String(shopifyOrderId),
+    shopifyOrderId: uniqueOrderId,
     paylaterOrderId: paylaterRef,
     merchantId: merchant._id,
     merchant: merchant.shop,
@@ -68,13 +70,13 @@ export async function createPayLaterOrder({
     paylaterStatus: 'pending',
     amount: parsedAmount,
     currency: 'QAR',
-    paymentLink: paymentUrl,
+    paymentLink: encryptedPaymentLink,
     customerEmail: customerEmail || null,
     customerName: customerName || null
   });
 
-
   await order.save();
+  console.log(`✅ PayLater order saved in DB for Shopify order ${shopifyOrderId}`);
 
   const orderData = {
     paylaterOrderId: paylaterRef,
@@ -98,6 +100,43 @@ export async function createPayLaterOrder({
     }
   }
 
-  console.log(`✅ PayLater link ready for order ${shopifyOrderId}: ${paymentUrl} (ref ${paylaterRef})`);
+  console.log(`🚀 PayLater link ready for order ${shopifyOrderId}: ${paymentUrl} (ref ${paylaterRef})`);
+
+  try {
+    console.log(`💡 Adding 'PayLater' tag to Shopify order ${shopifyOrderId}...`);
+
+    const { data: orderDataFromShopify } = await axios.get(
+      `https://${merchant.shop}/admin/api/2025-10/orders/${shopifyOrderId}.json`,
+      {
+        headers: {
+          'X-Shopify-Access-Token': decryptedToken,
+          'Content-Type': 'application/json'
+        }
+      }
+    );
+
+    const currentTags = orderDataFromShopify.order.tags || '';
+    const newTags = currentTags.includes('PayLater')
+      ? currentTags
+      : currentTags
+        ? `${currentTags}, PayLater`
+        : 'PayLater';
+
+    const tagResponse = await axios.put(
+      `https://${merchant.shop}/admin/api/2025-10/orders/${shopifyOrderId}.json`,
+      { order: { id: shopifyOrderId, tags: newTags } },
+      {
+        headers: {
+          'X-Shopify-Access-Token': decryptedToken,
+          'Content-Type': 'application/json'
+        }
+      }
+    );
+
+    console.log('✅ Shopify tag update success:', tagResponse.data.order.tags);
+  } catch (tagErr) {
+    console.error('⚠️ Failed to add PayLater tag:', tagErr.response?.data || tagErr.message);
+  }
+
   return { paymentUrl, paylaterOrderId: paylaterRef };
 }
