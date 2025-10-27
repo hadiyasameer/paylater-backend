@@ -38,6 +38,7 @@ router.post('/', async (req, res) => {
           payload?.current_total_price ??
           payload?.total_price ??
           payload?.total_price_set?.shop_money?.amount;
+
         if (!shopifyOrderId || !totalStr) return res.status(200).send('Ignored: Missing order ID or total price');
 
         const amountNumber = Number(totalStr);
@@ -51,6 +52,11 @@ router.post('/', async (req, res) => {
         if (!isPayLater) return res.status(200).send('Not a PayLater order');
 
         const customerEmail = payload?.email || payload?.customer?.email || payload?.contact_email || null;
+
+        const customerName =
+          payload?.customer?.first_name && payload?.customer?.last_name
+            ? `${payload.customer.first_name} ${payload.customer.last_name}`
+            : payload?.billing_address?.name || payload?.shipping_address?.name || null;
 
         let existingOrder = await Order.findOne({
           shopifyOrderId: String(shopifyOrderId),
@@ -67,7 +73,12 @@ router.post('/', async (req, res) => {
             });
 
             if (paymentUrl && paylaterOrderId) {
-              existingOrder = await Order.findOne({ shopifyOrderId: String(shopifyOrderId), merchantId: merchant._id });
+              existingOrder = await Order.findOneAndUpdate(
+                { shopifyOrderId: String(shopifyOrderId), merchantId: merchant._id },
+                { customerName },
+                { new: true }
+              );
+
               console.log(`✅ PayLater link created for order ${shopifyOrderId}: ${paymentUrl}`);
             } else {
               console.error(`❌ Failed to create PayLater link for ${shopifyOrderId}`);
@@ -94,7 +105,6 @@ router.post('/', async (req, res) => {
         const normalizedStatus = normalizeShopifyStatus(payload?.financial_status);
         order.shopifyStatus = normalizedStatus;
 
-        // Updated cancellation logic
         if (normalizedStatus === 'cancelled' && order.paylaterStatus !== 'failed') {
           await order.autoCancel(merchant);
 
@@ -102,7 +112,7 @@ router.post('/', async (req, res) => {
             try {
               await sendCancellationEmail({
                 email: order.customerEmail,
-                fullname: order.customerName,
+                fullname: order.customerName || order.customerEmail, 
                 order
               });
               console.log(`✉️ Cancellation email sent for Shopify order ${shopifyOrderId}`);
