@@ -1,6 +1,6 @@
-import axios from 'axios';
-import { connectDb } from "../utils/db.js";
-import { Merchant } from "../models/merchant.js";
+import axios from "axios";
+import { prisma, connectDb } from "../utils/db.js";
+import { decrypt } from "../utils/encryption.js";
 
 export const getPayLaterLink = async (req, res) => {
   try {
@@ -12,50 +12,72 @@ export const getPayLaterLink = async (req, res) => {
 
     await connectDb();
 
-    const merchant = await Merchant.findOne({ shop });
-    if (!merchant) return res.status(404).json({ message: "Merchant not found" });
+    const merchant = await prisma.merchant.findFirst({
+      where: { shop },
+    });
 
-    const { paylaterApiKey } = merchant.getDecryptedData();
-    if (!paylaterApiKey) {
+    if (!merchant) {
+      return res.status(404).json({ message: "Merchant not found" });
+    }
+
+    const decryptedApiKey = decrypt(merchant.paylaterApiKey);
+    if (!decryptedApiKey) {
       return res.status(400).json({ message: "Merchant BNPL API key missing" });
     }
 
     const failRedirectUrl = `${process.env.SERVER_URL}/api/paylater/cancel?orderId=${order_id}`;
-    const successRedirectUrl = merchant.successUrl || `${process.env.FRONTEND_URL}/pages/paylater-success`;
+    const successRedirectUrl =
+      merchant.successUrl || `${process.env.FRONTEND_URL}/pages/paylater-success`;
+
+    const parsedAmount = parseFloat(amount);
+    if (isNaN(parsedAmount) || parsedAmount <= 0) {
+      return res.status(400).json({ message: "Invalid amount" });
+    }
 
     const payload = {
       merchantId: merchant.paylaterMerchantId,
       outletId: merchant.paylaterOutletId,
       currency: "QAR",
-      amount: parseFloat(amount),
+      amount: parsedAmount,
       orderId: order_id,
       successRedirectUrl,
-      failRedirectUrl
+      failRedirectUrl,
     };
+
+    console.log("👉 Sending PayLater link request:", payload);
 
     const response = await axios.post(
       `${process.env.BNPL_BASE_URL}/api/paylater/merchant-portal/web-checkout/`,
       payload,
       {
         headers: {
-          'x-api-key': paylaterApiKey,
-          'Content-Type': 'application/json'
+          "x-api-key": decryptedApiKey,
+          "Content-Type": "application/json",
         },
-        timeout: 12000
+        timeout: 12000,
       }
     );
 
     const paymentUrl = response.data?.paymentLinkUrl;
-    if (!paymentUrl) return res.status(502).json({ message: "Failed to generate PayLater link" });
+    if (!paymentUrl) {
+      return res
+        .status(502)
+        .json({ message: "Failed to generate PayLater link" });
+    }
 
     return res.json({
       orderId: order_id,
       paymentUrl,
-      message: "PayLater link generated successfully"
+      message: "PayLater link generated successfully",
     });
-
   } catch (err) {
-    console.error("❌ Error generating PayLater link:", err.response?.data || err.message);
-    return res.status(500).json({ message: "Internal server error", error: err.response?.data || err.message });
+    console.error(
+      "❌ Error generating PayLater link:",
+      err.response?.data || err.message
+    );
+    return res.status(500).json({
+      message: "Internal server error",
+      error: err.response?.data || err.message,
+    });
   }
 };

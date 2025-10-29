@@ -1,9 +1,7 @@
 import axios from "axios";
-import { Order } from "../models/order.js";
-import { connectDb } from "../utils/db.js";
-import { Merchant } from "../models/merchant.js";
+import { prisma, connectDb } from "../utils/db.js";
 import { sendPayLaterEmail } from "../utils/sendEmail.js";
-import { encrypt } from "../utils/encryption.js";
+import { encrypt, decrypt } from "../utils/encryption.js";
 
 export const createBnplOrder = async (req, res) => {
   try {
@@ -30,12 +28,16 @@ export const createBnplOrder = async (req, res) => {
       return res.status(400).json({ message: "Missing required fields" });
     }
 
-    const merchant = await Merchant.findOne({ paylaterMerchantId });
-    if (!merchant)
-      return res.status(404).json({ message: "Unknown merchant" });
+    const merchant = await prisma.merchant.findFirst({
+      where: { paylaterMerchantId },
+    });
 
-    const { paylaterApiKey } = merchant.getDecryptedData();
-    if (!paylaterApiKey) {
+    if (!merchant) {
+      return res.status(404).json({ message: "Unknown merchant" });
+    }
+
+    const decryptedApiKey = decrypt(merchant.paylaterApiKey);
+    if (!decryptedApiKey) {
       return res.status(400).json({ message: "Merchant BNPL API key missing" });
     }
 
@@ -45,16 +47,18 @@ export const createBnplOrder = async (req, res) => {
       return res.status(400).json({ message: "Invalid amount" });
     }
 
-    const existingOrder = await Order.findOne({
-      shopifyOrderId: String(orderId),
-      merchantId: merchant._id
+    const existingOrder = await prisma.order.findFirst({
+      where: {
+        shopifyOrderId: String(orderId),
+        merchantId: merchant.id,
+      },
     });
 
     if (existingOrder) {
       return res.json({
-        paymentUrl: existingOrder.toObject().paymentLink,
+        paymentUrl: decrypt(existingOrder.paymentLink),
         paylaterOrderId: existingOrder.paylaterOrderId,
-        message: "Order already exists"
+        message: "Order already exists",
       });
     }
 
@@ -68,7 +72,7 @@ export const createBnplOrder = async (req, res) => {
       amount: parsedAmount,
       orderId: String(orderId),
       successRedirectUrl,
-      failRedirectUrl
+      failRedirectUrl,
     };
 
     console.log("👉 Sending PayLater request:", payload);
@@ -78,10 +82,10 @@ export const createBnplOrder = async (req, res) => {
       payload,
       {
         headers: {
-          "x-api-key": paylaterApiKey,
-          "Content-Type": "application/json"
+          "x-api-key": decryptedApiKey,
+          "Content-Type": "application/json",
         },
-        timeout: 10000
+        timeout: 10000,
       }
     );
 
@@ -101,32 +105,33 @@ export const createBnplOrder = async (req, res) => {
       console.warn(`⚠️ Warning: No customer email provided for order ${orderId}`);
     }
 
-    const newOrder = new Order({
-      shopifyOrderId: String(orderId),
-      paylaterOrderId: paymentId,
-      merchantId: merchant._id,
-      merchant: merchant.shop,
-      shopifyStatus: "pending",
-      paylaterStatus: "pending",
-      amount: parsedAmount,
-      currency: "QAR",
-      paymentLink: encryptedPaymentUrl,
-      cancelTimeLimit,
-      createdAt: new Date(),
-      customerEmail,
-      customerName: fullname || null,
-      shopDomain,
-      warningSent: false
+    const newOrder = await prisma.order.create({
+      data: {
+        shopifyOrderId: String(orderId),
+        paylaterOrderId: paymentId,
+        merchant: {
+          connect: { id: merchant.id },
+        },
+        shopifyStatus: "pending",
+        paylaterStatus: "pending",
+        amount: parsedAmount,
+        currency: "QAR",
+        paymentLink: encryptedPaymentUrl,
+        cancelTimeLimit,
+        customerEmail,
+        customerName: fullname || null,
+        shopDomain,
+        warningSent: false,
+        createdAt: new Date(),
+      },
     });
 
-    await newOrder.save();
 
     console.log(`✅ Order ${orderId} saved in DB`);
     console.log(`🚀 Payment link generated for order ${orderId}`);
 
-
     if (email) {
-      const plainLink = newOrder.toObject().paymentLink;
+      const plainLink = paymentUrl;
       await sendPayLaterEmail({
         email,
         fullname: fullname || email,
@@ -136,8 +141,8 @@ export const createBnplOrder = async (req, res) => {
           date: newOrder.createdAt,
           amount: newOrder.amount,
           currency: newOrder.currency,
-          paymentLink: plainLink
-        }
+          paymentLink: plainLink,
+        },
       });
     }
 
@@ -145,13 +150,13 @@ export const createBnplOrder = async (req, res) => {
       paymentUrl,
       paylaterOrderId: paymentId,
       message:
-        "PayLater order created successfully. Expiry warning and auto-cancel will be handled by cron."
+        "PayLater order created successfully. Expiry warning and auto-cancel will be handled by cron.",
     });
   } catch (err) {
     console.error("❌ Error creating BNPL order:", err.message);
     res.status(500).json({
       message: "Failed to create PayLater order",
-      error: err.response?.data || err.message
+      error: err.response?.data || err.message,
     });
   }
 };

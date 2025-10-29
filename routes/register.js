@@ -1,11 +1,11 @@
-import express from 'express';
-import { Merchant } from '../models/merchant.js';
-import { connectDb } from '../utils/db.js';
-import { isValidShopDomain } from '../utils/shopifyUtils.js';
+import express from "express";
+import { prisma, connectDb } from "../utils/db.js";
+import { encrypt, decrypt } from "../utils/encryption.js";
+import { isValidShopDomain } from "../utils/shopifyUtils.js";
 
 const router = express.Router();
 
-router.post('/', async (req, res) => {
+router.post("/", async (req, res) => {
   try {
     await connectDb();
 
@@ -18,43 +18,64 @@ router.post('/', async (req, res) => {
       webhookSecret,
     } = req.body;
 
-    if (!shop || !accessToken || !paylaterMerchantId || !paylaterOutletId || !paylaterApiKey || !webhookSecret) {
+    if (
+      !shop ||
+      !accessToken ||
+      !paylaterMerchantId ||
+      !paylaterOutletId ||
+      !paylaterApiKey ||
+      !webhookSecret
+    ) {
       return res.status(400).json({
-        message: 'Missing required fields. Make sure paylaterApiKey is included.'
+        message:
+          "Missing required fields. Make sure paylaterApiKey is included.",
       });
     }
 
     if (!isValidShopDomain(shop)) {
-      return res.status(400).json({ message: 'Invalid Shopify shop domain' });
+      return res
+        .status(400)
+        .json({ message: "Invalid Shopify shop domain" });
     }
 
-    let merchant = await Merchant.findOne({ shop });
-    if (merchant) {
-      return res.status(400).json({ message: 'Shop already registered' });
+    const existingMerchant = await prisma.merchant.findFirst({
+      where: { shop },
+    });
+    if (existingMerchant) {
+      return res.status(400).json({ message: "Shop already registered" });
     }
 
-    merchant = new Merchant({
+    const encryptedData = {
       shop,
-      accessToken,
+      accessToken: encrypt(accessToken),
       paylaterMerchantId,
       paylaterOutletId,
-      paylaterApiKey,
-      webhookSecret
+      paylaterApiKey: encrypt(paylaterApiKey),
+      webhookSecret: encrypt(webhookSecret),
+    };
+
+    const merchant = await prisma.merchant.create({
+      data: encryptedData,
     });
-    await merchant.save();
 
     res.json({
       success: true,
-      message: 'Merchant registered successfully',
-      data: merchant
+      message: "Merchant registered successfully",
+      data: {
+        ...merchant,
+        accessToken: decrypt(merchant.accessToken),
+        paylaterApiKey: decrypt(merchant.paylaterApiKey),
+        webhookSecret: decrypt(merchant.webhookSecret),
+      },
     });
-
   } catch (err) {
-    console.error('❌ Error registering merchant:', err);
-    res.status(500).json({ message: 'Internal server error', error: err.message });
+    console.error("❌ Error registering merchant:", err);
+    res.status(500).json({
+      message: "Internal server error",
+      error: err.message,
+    });
   }
 });
-
 
 router.post("/update-cancel-time", async (req, res) => {
   try {
@@ -62,25 +83,37 @@ router.post("/update-cancel-time", async (req, res) => {
     const { shop, cancelTimeLimit } = req.body;
 
     if (!shop || cancelTimeLimit === undefined || isNaN(cancelTimeLimit)) {
-      return res.status(400).json({ error: "shop and numeric cancelTimeLimit are required" });
+      return res
+        .status(400)
+        .json({ error: "shop and numeric cancelTimeLimit are required" });
     }
 
+    const updatedMerchant = await prisma.merchant.updateMany({
+      where: { shop },
+      data: { cancelTimeLimit: parseInt(cancelTimeLimit) },
+    });
 
-    const merchant = await Merchant.findOneAndUpdate(
-      { shop },
-      { cancelTimeLimit },
-      { new: true }
-    );
+    if (updatedMerchant.count === 0) {
+      return res.status(404).json({ error: "Merchant not found" });
+    }
 
-    if (!merchant) return res.status(404).json({ error: "Merchant not found" });
+    const merchant = await prisma.merchant.findFirst({ where: { shop } });
 
-    res.json({ message: "Cancel time limit updated successfully", merchant });
+    res.json({
+      message: "Cancel time limit updated successfully",
+      merchant: {
+        ...merchant,
+        accessToken: decrypt(merchant.accessToken),
+        paylaterApiKey: merchant.paylaterApiKey
+          ? decrypt(merchant.paylaterApiKey)
+          : null,
+        webhookSecret: decrypt(merchant.webhookSecret),
+      },
+    });
   } catch (error) {
-    console.error("Error updating cancel time:", error);
+    console.error("❌ Error updating cancel time:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 });
 
 export default router;
-
-

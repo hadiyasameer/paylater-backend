@@ -1,20 +1,21 @@
-# Use official Node.js LTS image
 FROM node:20-alpine
 
-# Set working directory
 WORKDIR /app
 
-# Copy package.json and package-lock.json first (for caching)
 COPY package*.json ./
 
-# Install dependencies
-RUN npm install --production
+RUN npm install
 
-# Copy the rest of the source code
+# Copy the rest of your app
 COPY . .
 
-# Expose the port your app listens on
+# Set DATABASE_URL build arg for Prisma
+ARG DATABASE_URL
+ENV DATABASE_URL=$DATABASE_URL
+
+# Generate Prisma client inside Docker
+RUN npx prisma generate
+
 EXPOSE 5000
 
-# Command to run your app
 CMD ["node", "app.js"]

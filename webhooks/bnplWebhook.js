@@ -1,27 +1,27 @@
-import express from 'express';
-import crypto from 'crypto';
-import axios from 'axios';
-import { Merchant } from '../models/merchant.js';
-import { Order } from '../models/order.js';
-import { decrypt } from '../utils/encryption.js';
-import { sendCancellationEmail } from '../utils/sendEmail.js';
-import { normalizePayLaterStatus } from '../utils/status.js';
+import express from "express";
+import crypto from "crypto";
+import axios from "axios";
+import { prisma } from "../utils/db.js";
+import { decrypt } from "../utils/encryption.js";
+import { sendCancellationEmail } from "../utils/sendEmail.js";
+import { normalizePayLaterStatus } from "../utils/status.js";
 
 const router = express.Router();
 
 const safeEqual = (a, b) => {
-  const ba = Buffer.from(String(a || ''), 'utf8');
-  const bb = Buffer.from(String(b || ''), 'utf8');
+  const ba = Buffer.from(String(a || ""), "utf8");
+  const bb = Buffer.from(String(b || ""), "utf8");
   if (ba.length !== bb.length) return false;
   return crypto.timingSafeEqual(ba, bb);
 };
+
 
 const updateShopifyOrderStatus = async (shop, accessToken, orderId, financialStatus) => {
   try {
     await axios.put(
       `https://${shop}/admin/api/2025-10/orders/${orderId}.json`,
       { order: { id: orderId, financial_status: financialStatus } },
-      { headers: { 'X-Shopify-Access-Token': accessToken, 'Content-Type': 'application/json' } }
+      { headers: { "X-Shopify-Access-Token": accessToken, "Content-Type": "application/json" } }
     );
     console.log(`🚀 Shopify order ${orderId} updated: financial_status=${financialStatus}`);
   } catch (err) {
@@ -33,8 +33,8 @@ const captureShopifyTransaction = async (shop, accessToken, orderId, amount) => 
   try {
     await axios.post(
       `https://${shop}/admin/api/2025-10/orders/${orderId}/transactions.json`,
-      { transaction: { kind: 'capture', status: 'success', amount } },
-      { headers: { 'X-Shopify-Access-Token': accessToken, 'Content-Type': 'application/json' } }
+      { transaction: { kind: "capture", status: "success", amount } },
+      { headers: { "X-Shopify-Access-Token": accessToken, "Content-Type": "application/json" } }
     );
     console.log(`💰 Shopify transaction captured for order ${orderId}`);
   } catch (err) {
@@ -42,69 +42,94 @@ const captureShopifyTransaction = async (shop, accessToken, orderId, amount) => 
   }
 };
 
-router.post('/', async (req, res) => {
+router.post("/", async (req, res) => {
   try {
-    console.log('📩 BNPL Webhook received:', JSON.stringify(req.body, null, 2));
+    console.log("📩 BNPL Webhook received:", JSON.stringify(req.body, null, 2));
 
     const { merchantId, orderId, status, timestamp, txHash, signature, comments } = req.body || {};
 
     if (!merchantId || !orderId || !status || !timestamp || !txHash || !signature) {
-      return res.status(400).send('Missing required fields');
+      return res.status(400).send("Missing required fields");
     }
 
-    const merchant = await Merchant.findOne({ paylaterMerchantId: merchantId });
-    if (!merchant) return res.status(404).send('Merchant not found');
+    const merchant = await prisma.merchant.findFirst({
+      where: { paylaterMerchantId: merchantId },
+    });
+    if (!merchant) return res.status(404).send("Merchant not found");
 
     const webhookSecretPlain = decrypt(merchant.webhookSecret);
 
-    const cleanComments = String((comments || '').trim());
+    const cleanComments = String((comments || "").trim());
     const dataString = `${merchantId}${orderId}${status}${timestamp}${cleanComments}`.toUpperCase();
-    const computedTxHash = crypto.createHash('md5').update(dataString).digest('hex');
-    const computedSignature = crypto.createHmac('sha256', webhookSecretPlain).update(computedTxHash).digest('hex');
+    const computedTxHash = crypto.createHash("md5").update(dataString).digest("hex");
+    const computedSignature = crypto
+      .createHmac("sha256", webhookSecretPlain)
+      .update(computedTxHash)
+      .digest("hex");
 
     if (!safeEqual(computedTxHash, txHash) || !safeEqual(computedSignature, signature)) {
-      console.error('❌ Signature verification failed!');
-      return res.status(403).send('Invalid signature');
+      console.error("❌ Signature verification failed!");
+      return res.status(403).send("Invalid signature");
     }
 
-    let order =
-      (await Order.findOne({ paylaterOrderId: orderId, merchantId: merchant._id })) ||
-      (await Order.findOne({ shopifyOrderId: String(orderId), merchantId: merchant._id }));
+    let order = await prisma.order.findFirst({
+      where: {
+        OR: [
+          { paylaterOrderId: String(orderId) },
+          { shopifyOrderId: String(orderId) },
+        ],
+        merchantId: merchant.id,
+      },
+    });
 
     if (!order) {
-      order = new Order({
-        paylaterOrderId: orderId,
-        merchantId: merchant._id,
-        shopifyStatus: 'pending',
-        paylaterStatus: 'pending',
-        customerEmail: req.body.customerEmail || req.body.email || 'unknown@example.com',
-        customerName: req.body.customerName || req.body.fullname || 'Customer',
+      order = await prisma.order.create({
+        data: {
+          paylaterOrderId: String(orderId),
+          merchantId: merchant.id,
+          shopifyStatus: "pending",
+          paylaterStatus: "pending",
+          customerEmail: req.body.customerEmail || req.body.email || "unknown@example.com",
+          customerName: req.body.customerName || req.body.fullname || "Customer",
+        },
       });
-      await order.save();
       console.log(`🆕 Created new order record for BNPL order ${orderId}`);
     }
 
     const nextStatus = normalizePayLaterStatus(status);
 
-    await order.updateStatuses({
-      paylaterStatus: nextStatus,
-      transactionId: txHash,
-      paymentDate: new Date(Number(timestamp)),
-      comments: cleanComments.slice(0, 2000),
+    await prisma.order.update({
+      where: { id: order.id },
+      data: {
+        paylaterStatus: nextStatus,
+        paylaterTransactionId: txHash,
+        paylaterPaymentDate: new Date(Number(timestamp)),
+        paylaterComments: cleanComments.slice(0, 2000),
+      },
     });
 
     const decryptedAccessToken = decrypt(merchant.accessToken);
 
-    if (nextStatus === 'paid' && order.shopifyStatus !== 'paid') {
+ 
+    if (nextStatus === "paid" && order.shopifyStatus !== "paid") {
       await captureShopifyTransaction(merchant.shop, decryptedAccessToken, order.shopifyOrderId, order.amount);
-      await updateShopifyOrderStatus(merchant.shop, decryptedAccessToken, order.shopifyOrderId, 'paid');
-      order.shopifyStatus = 'paid';
-      await order.save();
+      await updateShopifyOrderStatus(merchant.shop, decryptedAccessToken, order.shopifyOrderId, "paid");
+
+      await prisma.order.update({
+        where: { id: order.id },
+        data: { shopifyStatus: "paid" },
+      });
+
       console.log(`✅ Shopify order ${order.shopifyOrderId} marked as paid via BNPL webhook`);
-    } else if (nextStatus === 'failed') {
-      order.shopifyStatus = 'cancelled';
-      await updateShopifyOrderStatus(merchant.shop, decryptedAccessToken, order.shopifyOrderId, 'cancelled');
-      await order.save();
+    }
+
+    else if (nextStatus === "failed") {
+      await prisma.order.update({
+        where: { id: order.id },
+        data: { shopifyStatus: "cancelled" },
+      });
+
+      await updateShopifyOrderStatus(merchant.shop, decryptedAccessToken, order.shopifyOrderId, "cancelled");
 
       if (order.customerEmail) {
         try {
@@ -118,14 +143,17 @@ router.post('/', async (req, res) => {
           console.error(`❌ Failed to send cancellation email for order ${orderId}:`, err.message || err);
         }
       }
-    } else {
+    }
+
+   
+    else {
       console.log(`ℹ️ No action required for order ${orderId} with status ${nextStatus}`);
     }
 
-    return res.status(200).send('Webhook processed successfully');
+    return res.status(200).send("Webhook processed successfully");
   } catch (err) {
-    console.error('❌ BNPL webhook error:', err);
-    return res.status(500).send('Processed with internal errors');
+    console.error("❌ BNPL webhook error:", err);
+    return res.status(500).send("Processed with internal errors");
   }
 });
 

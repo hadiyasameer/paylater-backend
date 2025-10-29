@@ -1,0 +1,54 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Merchant {
+  id                 String   @id @default(cuid())
+  shop               String   @unique
+  accessToken        String
+  paylaterMerchantId String
+  paylaterOutletId   String
+  paylaterApiKey     String?
+  webhookSecret      String
+  successUrl         String   @default("")
+  failUrl            String   @default("")
+  installedAt        DateTime @default(now())
+  cancelTimeLimit    Int      @default(10)
+
+  // Relation to Orders
+  orders             Order[]
+}
+
+model Order {
+  id                    String    @id @default(cuid())
+  shopifyOrderId        String
+  paylaterOrderId       String    @unique
+  merchantId            String
+  merchant              Merchant  @relation(fields: [merchantId], references: [id])
+  shopifyStatus         String    @default("pending")
+  paylaterStatus        String    @default("pending")
+  amount                Float
+  currency              String    @default("QAR")
+  paymentLink           String?
+  paylaterTransactionId String?
+  paylaterPaymentDate   DateTime?
+  paylaterComments      String?
+  customerEmail         String?
+  customerName          String?
+  shopDomain            String?
+  accessToken           String?
+  cancelTimeLimit       Int       @default(10)
+  warningSent           Boolean   @default(false)
+  halfTimeReminderSent  Boolean   @default(false)
+  cancelEmailSent       Boolean   @default(false)
+  cancelled             Boolean   @default(false)
+  lastWebhookAt         DateTime?
+  lastWebhookId         String?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+}

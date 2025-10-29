@@ -1,7 +1,5 @@
 import express from "express";
-import { Order } from "../models/order.js";
-import { Merchant } from "../models/merchant.js";
-import { connectDb } from "../utils/db.js";
+import { prisma, connectDb } from "../utils/db.js";
 import { sendCancellationEmail } from "../utils/sendEmail.js";
 import { decrypt } from "../utils/encryption.js";
 import axios from "axios";
@@ -15,10 +13,13 @@ router.get("/cancel", async (req, res) => {
 
     if (!orderId) return res.status(400).send("Missing order ID");
 
-    const order = await Order.findOne({ shopifyOrderId: orderId }).populate("merchantId");
-    if (!order) return res.status(404).send("Order not found");
+    const order = await prisma.order.findFirst({
+      where: { shopifyOrderId: String(orderId) },
+      include: { merchant: true },
+    });
 
-    const merchant = order.merchantId;
+    if (!order) return res.status(404).send("Order not found");
+    const merchant = order.merchant;
     if (!merchant) return res.status(404).send("Merchant not found");
 
     let accessToken;
@@ -34,21 +35,20 @@ router.get("/cancel", async (req, res) => {
       return res.redirect(`${process.env.FRONTEND_URL}/payment-cancelled`);
     }
 
-    order.shopifyStatus = "cancelled";
-    order.paylaterStatus = "failed";
-    await order.save();
+    await prisma.order.update({
+      where: { id: order.id },
+      data: {
+        shopifyStatus: "cancelled",
+        paylaterStatus: "failed",
+      },
+    });
     console.log(`✅ Order ${orderId} updated in DB as cancelled`);
 
     if (merchant.shop && accessToken) {
       try {
         await axios.post(
           `https://${merchant.shop}/admin/api/2025-10/orders/${orderId}/cancel.json`,
-          {
-            transaction: {
-              kind: "void",
-              status: "success",
-            },
-          },
+          { transaction: { kind: "void", status: "success" } },
           {
             headers: {
               "X-Shopify-Access-Token": accessToken,
@@ -56,21 +56,13 @@ router.get("/cancel", async (req, res) => {
             },
           }
         );
-        console.log(`💳 Payment voided for Shopify order ${orderId}`);
 
-        const response = await axios.post(
-          `https://${merchant.shop}/admin/api/2025-10/orders/${orderId}/cancel.json`,
-          {},
-          {
-            headers: {
-              "X-Shopify-Access-Token": accessToken,
-              "Content-Type": "application/json",
-            },
-          }
-        );
-        console.log(`🛒 Shopify order ${orderId} cancelled successfully:`, response.data);
+        console.log(`🛒 Shopify order ${orderId} cancelled successfully.`);
       } catch (err) {
-        console.error(`❌ Failed to cancel Shopify order ${orderId}:`, err.response?.data || err.message);
+        console.error(
+          `❌ Failed to cancel Shopify order ${orderId}:`,
+          err.response?.data || err.message
+        );
       }
     }
 
@@ -83,7 +75,7 @@ router.get("/cancel", async (req, res) => {
         });
         console.log(`✉️ Cancellation email sent to ${order.customerEmail}`);
       } catch (err) {
-        console.error(`❌ Failed to send cancellation email for ${orderId}:`, err);
+        console.error(`❌ Failed to send cancellation email for ${orderId}:`, err.message);
       }
     } else {
       console.warn(`⚠️ No customer email for order ${orderId}, skipping email`);
