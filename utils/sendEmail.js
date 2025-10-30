@@ -54,7 +54,20 @@ export const sendExpiryWarningEmail = async ({ email, fullname, order, cancelTim
   const remainingtime =
     (cancelTimeLimit !== undefined ? cancelTimeLimit :
       order.cancelTimeLimit !== undefined ? order.cancelTimeLimit : 10);
+  let decryptedLink = null;
+  try {
+    const encryptedLink =
+      order.paymentLink ||
+      order.paymentlink ||
+      order.payment_link ||
+      order.payLaterLink ||
+      order.link ||
+      order?.links?.paymentLink;
 
+    decryptedLink = encryptedLink ? decrypt(encryptedLink) : null;
+  } catch (err) {
+    console.error("❌ Failed to decrypt payment link:", err.message);
+  }
   const payload = {
     app_id: process.env.ONESIGNAL_APP_ID,
     target_channel: "email",
@@ -65,15 +78,16 @@ export const sendExpiryWarningEmail = async ({ email, fullname, order, cancelTim
       user: { fullname },
       order: {
         orderid: order.paylaterOrderId,
-        merchantname: order.merchant,
+        merchantname: typeof order.merchant === "string" ? order.merchant : order.merchant?.shop || "Your Shop",
         date: order.date || order.createdAt?.toLocaleString('en-US', { timeZone: 'Asia/Qatar' }),
         amount: order.amount,
         currency: order.currency,
         remainingtime,
-        paymentlink: order.paymentLink || order.paymentlink
+        paymentlink: decryptedLink
       }
     }
   };
+
   console.log('OneSignal expiry email payload:', JSON.stringify(payload, null, 2));
   try {
     const response = await axios.post(
@@ -108,7 +122,7 @@ export const sendCancellationEmail = async ({ email, fullname, order }) => {
       user: { fullname },
       order: {
         orderid: order.paylaterOrderId,
-        merchantname: order.merchant,
+        merchantname: typeof order.merchant === "string" ? order.merchant : order.merchant?.shop || "Your Shop",
         date: order.date || order.createdAt?.toLocaleString('en-US', { timeZone: 'Asia/Qatar' }),
         amount: order.amount,
         currency: order.currency,
@@ -119,6 +133,7 @@ export const sendCancellationEmail = async ({ email, fullname, order }) => {
       message: "Your payment has been cancelled. No charges were made."
     }
   };
+
   console.log('OneSignal cancellation email payload:', JSON.stringify(payload, null, 2));
 
 
