@@ -103,8 +103,9 @@ export async function createPayLaterOrder({
     data: {
       shopifyOrderId: uniqueOrderId,
       paylaterOrderId: paylaterRef,
-      merchantId: merchant.id,
-      merchant: merchant.shop,
+      merchant: {
+        connect: { id: merchant.id },
+      },
       shopifyStatus: "pending",
       paylaterStatus: "pending",
       amount: parsedAmount,
@@ -114,6 +115,7 @@ export async function createPayLaterOrder({
       customerName,
     },
   });
+
   console.log(`✅ PayLater order saved in DB for Shopify order ${shopifyOrderId}`);
 
   if (customerEmail) {
@@ -166,8 +168,8 @@ export async function createPayLaterOrder({
     const newTags = currentTags.includes("PayLater")
       ? currentTags
       : currentTags
-      ? `${currentTags}, PayLater`
-      : "PayLater";
+        ? `${currentTags}, PayLater`
+        : "PayLater";
 
     if (newTags !== currentTags) {
       await axios.put(

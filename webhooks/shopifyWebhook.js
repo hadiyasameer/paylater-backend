@@ -7,7 +7,7 @@ import { verifyShopifyWebhook } from "../utils/shopifyhmac.js";
 
 const router = express.Router();
 
-router.post("/",  async (req, res) => {
+router.post("/", async (req, res) => {
   const shopDomain = req.headers["x-shopify-shop-domain"];
   const topic = req.headers["x-shopify-topic"];
 
@@ -80,8 +80,7 @@ router.post("/",  async (req, res) => {
                 data: {
                   shopifyOrderId: String(shopifyOrderId),
                   paylaterOrderId,
-                  merchantId: merchant.id,
-                  merchant: merchant.shop,
+                  merchant: { connect: { id: merchant.id } }, 
                   amount: amountNumber,
                   customerEmail,
                   customerName,
@@ -91,6 +90,7 @@ router.post("/",  async (req, res) => {
                   paymentLink: paymentUrl,
                 },
               });
+
 
               console.log(`✅ PayLater link created for order ${shopifyOrderId}: ${paymentUrl}`);
             } else {

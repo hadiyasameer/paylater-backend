@@ -86,13 +86,14 @@ router.post("/", async (req, res) => {
       order = await prisma.order.create({
         data: {
           paylaterOrderId: String(orderId),
-          merchantId: merchant.id,
+          merchant: { connect: { id: merchant.id } }, 
           shopifyStatus: "pending",
           paylaterStatus: "pending",
           customerEmail: req.body.customerEmail || req.body.email || "unknown@example.com",
           customerName: req.body.customerName || req.body.fullname || "Customer",
         },
       });
+
       console.log(`🆕 Created new order record for BNPL order ${orderId}`);
     }
 
@@ -110,7 +111,7 @@ router.post("/", async (req, res) => {
 
     const decryptedAccessToken = decrypt(merchant.accessToken);
 
- 
+
     if (nextStatus === "paid" && order.shopifyStatus !== "paid") {
       await captureShopifyTransaction(merchant.shop, decryptedAccessToken, order.shopifyOrderId, order.amount);
       await updateShopifyOrderStatus(merchant.shop, decryptedAccessToken, order.shopifyOrderId, "paid");
@@ -145,7 +146,7 @@ router.post("/", async (req, res) => {
       }
     }
 
-   
+
     else {
       console.log(`ℹ️ No action required for order ${orderId} with status ${nextStatus}`);
     }
