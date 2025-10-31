@@ -18,13 +18,7 @@ export const createBnplOrder = async (req, res) => {
       shopDomain,
     } = req.body;
 
-    if (
-      !orderId ||
-      !amount ||
-      !successRedirectUrl ||
-      !paylaterMerchantId ||
-      !outletId
-    ) {
+    if (!orderId || !amount || !successRedirectUrl || !paylaterMerchantId || !outletId) {
       return res.status(400).json({ message: "Missing required fields" });
     }
 
@@ -63,7 +57,6 @@ export const createBnplOrder = async (req, res) => {
     }
 
     const failRedirectUrl = `${process.env.SERVER_URL}/api/paylater/cancel?orderId=${orderId}`;
-
     const payload = {
       merchantId: paylaterMerchantId,
       merchant: merchant.shop,
@@ -93,25 +86,23 @@ export const createBnplOrder = async (req, res) => {
     const paymentId = response.data?.paylaterRef || orderId;
 
     if (!paymentUrl) {
-      return res
-        .status(502)
-        .json({ message: "PayLater API returned no payment link" });
+      return res.status(502).json({ message: "PayLater API returned no payment link" });
     }
 
     const encryptedPaymentUrl = encrypt(paymentUrl);
-
     const customerEmail = email || "unknown@example.com";
     if (customerEmail === "unknown@example.com") {
       console.warn(`⚠️ Warning: No customer email provided for order ${orderId}`);
     }
 
+    const decryptedAccessToken = merchant.accessToken ? decrypt(merchant.accessToken) : null;
+    const shopDomainValue = shopDomain || merchant.shop;
+
     const newOrder = await prisma.order.create({
       data: {
         shopifyOrderId: String(orderId),
         paylaterOrderId: paymentId,
-        merchant: {
-          connect: { id: merchant.id },
-        },
+        merchantId: merchant.id, 
         shopifyStatus: "pending",
         paylaterStatus: "pending",
         amount: parsedAmount,
@@ -120,30 +111,35 @@ export const createBnplOrder = async (req, res) => {
         cancelTimeLimit,
         customerEmail,
         customerName: fullname || null,
-        shopDomain,
+        shopDomain: shopDomainValue,
+        accessToken: decryptedAccessToken, 
         warningSent: false,
+        halfTimeReminderSent: false,
+        cancelEmailSent: false,
+        cancelled: false,
         createdAt: new Date(),
+        updatedAt: new Date(),
       },
     });
 
-
     console.log(`✅ Order ${orderId} saved in DB`);
     console.log(`🚀 Payment link generated for order ${orderId}`);
+    console.log(`🛍️ Stored shopDomain=${shopDomainValue}, accessToken=${!!decryptedAccessToken}`);
 
     if (email) {
-      const plainLink = paymentUrl;
       await sendPayLaterEmail({
         email,
         fullname: fullname || email,
         order: {
           paylaterOrderId: newOrder.paylaterOrderId,
-          merchant: merchant.shop,
+          merchantname: merchant.shop,
           date: newOrder.createdAt,
           amount: newOrder.amount,
           currency: newOrder.currency,
-          paymentLink: plainLink,
+          paymentlink: paymentUrl,
         },
       });
+      console.log(`✉️ PayLater email sent to ${email} for order ${orderId}`);
     }
 
     res.json({

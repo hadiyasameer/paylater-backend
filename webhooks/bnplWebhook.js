@@ -15,7 +15,6 @@ const safeEqual = (a, b) => {
   return crypto.timingSafeEqual(ba, bb);
 };
 
-
 const updateShopifyOrderStatus = async (shop, accessToken, orderId, financialStatus) => {
   try {
     await axios.put(
@@ -46,15 +45,13 @@ router.post("/", async (req, res) => {
   try {
     console.log("📩 BNPL Webhook received:", JSON.stringify(req.body, null, 2));
 
-    const { merchantId, orderId, status, timestamp, txHash, signature, comments } = req.body || {};
+    const { merchantId, orderId, status, timestamp, txHash, signature, comments, customerEmail, customerName } = req.body || {};
 
     if (!merchantId || !orderId || !status || !timestamp || !txHash || !signature) {
       return res.status(400).send("Missing required fields");
     }
 
-    const merchant = await prisma.merchant.findFirst({
-      where: { paylaterMerchantId: merchantId },
-    });
+    const merchant = await prisma.merchant.findFirst({ where: { paylaterMerchantId: merchantId } });
     if (!merchant) return res.status(404).send("Merchant not found");
 
     const webhookSecretPlain = decrypt(merchant.webhookSecret);
@@ -62,10 +59,7 @@ router.post("/", async (req, res) => {
     const cleanComments = String((comments || "").trim());
     const dataString = `${merchantId}${orderId}${status}${timestamp}${cleanComments}`.toUpperCase();
     const computedTxHash = crypto.createHash("md5").update(dataString).digest("hex");
-    const computedSignature = crypto
-      .createHmac("sha256", webhookSecretPlain)
-      .update(computedTxHash)
-      .digest("hex");
+    const computedSignature = crypto.createHmac("sha256", webhookSecretPlain).update(computedTxHash).digest("hex");
 
     if (!safeEqual(computedTxHash, txHash) || !safeEqual(computedSignature, signature)) {
       console.error("❌ Signature verification failed!");
@@ -82,73 +76,73 @@ router.post("/", async (req, res) => {
       },
     });
 
+    const nextStatus = normalizePayLaterStatus(status);
+
     if (!order) {
       order = await prisma.order.create({
         data: {
+          id: crypto.randomUUID(),
           paylaterOrderId: String(orderId),
-          merchant: { connect: { id: merchant.id } }, 
-          shopifyStatus: "pending",
-          paylaterStatus: "pending",
-          customerEmail: req.body.customerEmail || req.body.email || "unknown@example.com",
-          customerName: req.body.customerName || req.body.fullname || "Customer",
+          shopifyOrderId: String(orderId),
+          merchant: { connect: { id: merchant.id } },
+          shopifyStatus: nextStatus === "paid" ? "paid" : "pending",
+          paylaterStatus: nextStatus,
+          amount: 0,
+          currency: "QAR",
+          customerEmail: customerEmail || req.body.email || "unknown@example.com",
+          customerName: customerName || req.body.fullname || "Customer",
+          shopDomain: merchant.shop,
+          accessToken: merchant.accessToken,
+          cancelTimeLimit: merchant.cancelTimeLimit ?? 10,
+          warningSent: false,
+          halfTimeReminderSent: false,
+          cancelEmailSent: false,
+          cancelled: false,
+          lastWebhookAt: new Date(),
+          lastWebhookId: crypto.randomUUID(),
+          paylaterTransactionId: txHash,
+          paylaterComments: cleanComments.slice(0, 2000),
+          paylaterPaymentDate: new Date(Number(timestamp)),
+          createdAt: new Date(),
+          updatedAt: new Date(),
         },
       });
-
       console.log(`🆕 Created new order record for BNPL order ${orderId}`);
+    } else {
+      await prisma.order.update({
+        where: { id: order.id },
+        data: {
+          paylaterStatus: nextStatus,
+          paylaterTransactionId: txHash,
+          paylaterPaymentDate: new Date(Number(timestamp)),
+          paylaterComments: cleanComments.slice(0, 2000),
+          lastWebhookAt: new Date(),
+          lastWebhookId: crypto.randomUUID(),
+          updatedAt: new Date(),
+        },
+      });
+      console.log(`🔄 Updated existing BNPL order ${orderId} with new status ${nextStatus}`);
     }
 
-    const nextStatus = normalizePayLaterStatus(status);
-
-    await prisma.order.update({
-      where: { id: order.id },
-      data: {
-        paylaterStatus: nextStatus,
-        paylaterTransactionId: txHash,
-        paylaterPaymentDate: new Date(Number(timestamp)),
-        paylaterComments: cleanComments.slice(0, 2000),
-      },
-    });
-
     const decryptedAccessToken = decrypt(merchant.accessToken);
-
 
     if (nextStatus === "paid" && order.shopifyStatus !== "paid") {
       await captureShopifyTransaction(merchant.shop, decryptedAccessToken, order.shopifyOrderId, order.amount);
       await updateShopifyOrderStatus(merchant.shop, decryptedAccessToken, order.shopifyOrderId, "paid");
-
-      await prisma.order.update({
-        where: { id: order.id },
-        data: { shopifyStatus: "paid" },
-      });
-
+      await prisma.order.update({ where: { id: order.id }, data: { shopifyStatus: "paid" } });
       console.log(`✅ Shopify order ${order.shopifyOrderId} marked as paid via BNPL webhook`);
-    }
-
-    else if (nextStatus === "failed") {
-      await prisma.order.update({
-        where: { id: order.id },
-        data: { shopifyStatus: "cancelled" },
-      });
-
+    } else if (nextStatus === "failed") {
       await updateShopifyOrderStatus(merchant.shop, decryptedAccessToken, order.shopifyOrderId, "cancelled");
+      await prisma.order.update({ where: { id: order.id }, data: { shopifyStatus: "cancelled" } });
 
       if (order.customerEmail) {
         try {
-          await sendCancellationEmail({
-            email: order.customerEmail,
-            fullname: order.customerName,
-            order,
-          });
+          await sendCancellationEmail({ email: order.customerEmail, fullname: order.customerName, order });
           console.log(`✉️ Cancellation email sent for failed BNPL order ${orderId}`);
         } catch (err) {
           console.error(`❌ Failed to send cancellation email for order ${orderId}:`, err.message || err);
         }
       }
-    }
-
-
-    else {
-      console.log(`ℹ️ No action required for order ${orderId} with status ${nextStatus}`);
     }
 
     return res.status(200).send("Webhook processed successfully");
