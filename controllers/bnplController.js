@@ -31,11 +31,13 @@ export const createBnplOrder = async (req, res) => {
     }
 
     const decryptedApiKey = decrypt(merchant.paylaterApiKey);
+    const decryptedAccessToken = merchant.accessToken ? decrypt(merchant.accessToken) : null;
+    const shopDomainValue = shopDomain || merchant.shop;
+
     if (!decryptedApiKey) {
       return res.status(400).json({ message: "Merchant BNPL API key missing" });
     }
 
-    const cancelTimeLimit = merchant.cancelTimeLimit || 10;
     const parsedAmount = parseFloat(amount);
     if (isNaN(parsedAmount) || parsedAmount <= 0) {
       return res.status(400).json({ message: "Invalid amount" });
@@ -91,28 +93,22 @@ export const createBnplOrder = async (req, res) => {
 
     const encryptedPaymentUrl = encrypt(paymentUrl);
     const customerEmail = email || "unknown@example.com";
-    if (customerEmail === "unknown@example.com") {
-      console.warn(`⚠️ Warning: No customer email provided for order ${orderId}`);
-    }
-
-    const decryptedAccessToken = merchant.accessToken ? decrypt(merchant.accessToken) : null;
-    const shopDomainValue = shopDomain || merchant.shop;
 
     const newOrder = await prisma.order.create({
       data: {
         shopifyOrderId: String(orderId),
         paylaterOrderId: paymentId,
-        merchantId: merchant.id, 
+        merchantId: merchant.id,
         shopifyStatus: "pending",
         paylaterStatus: "pending",
         amount: parsedAmount,
         currency: "QAR",
         paymentLink: encryptedPaymentUrl,
-        cancelTimeLimit,
+        cancelTimeLimit: merchant.cancelTimeLimit || 10,
         customerEmail,
         customerName: fullname || null,
         shopDomain: shopDomainValue,
-        accessToken: decryptedAccessToken, 
+        accessToken: decryptedAccessToken,
         warningSent: false,
         halfTimeReminderSent: false,
         cancelEmailSent: false,
@@ -123,8 +119,6 @@ export const createBnplOrder = async (req, res) => {
     });
 
     console.log(`✅ Order ${orderId} saved in DB`);
-    console.log(`🚀 Payment link generated for order ${orderId}`);
-    console.log(`🛍️ Stored shopDomain=${shopDomainValue}, accessToken=${!!decryptedAccessToken}`);
 
     if (email) {
       await sendPayLaterEmail({
@@ -142,11 +136,40 @@ export const createBnplOrder = async (req, res) => {
       console.log(`✉️ PayLater email sent to ${email} for order ${orderId}`);
     }
 
+    if (decryptedAccessToken && shopDomainValue) {
+      try {
+        const { data } = await axios.get(
+          `https://${shopDomainValue}/admin/api/2025-10/orders/${orderId}.json`,
+          { headers: { "X-Shopify-Access-Token": decryptedAccessToken } }
+        );
+
+        const shopifyOrder = data?.order;
+        const currentTags = shopifyOrder?.tags || "";
+        const newTags = currentTags.includes("PayLater")
+          ? currentTags
+          : currentTags
+            ? `${currentTags}, PayLater`
+            : "PayLater";
+
+        const noteContent = `PayLater Payment Link: ${paymentUrl}`;
+
+        await axios.put(
+          `https://${shopDomainValue}/admin/api/2025-10/orders/${orderId}.json`,
+          { order: { id: orderId, tags: newTags, note: noteContent } },
+          { headers: { "X-Shopify-Access-Token": decryptedAccessToken } }
+        );
+
+        console.log(`✅ Shopify tags and note updated for order ${orderId}`);
+      } catch (shopErr) {
+        console.error("⚠️ Failed to update Shopify order:", shopErr.response?.data || shopErr.message);
+      }
+    }
+
     res.json({
       paymentUrl,
       paylaterOrderId: paymentId,
       message:
-        "PayLater order created successfully. Expiry warning and auto-cancel will be handled by cron.",
+        "PayLater order created successfully. Shopify tags and note updated. Expiry warning and auto-cancel will be handled by cron.",
     });
   } catch (err) {
     console.error("❌ Error creating BNPL order:", err.message);

@@ -3,13 +3,11 @@ import { prisma } from "./db.js";
 import { sendPayLaterEmail } from "./sendEmail.js";
 import { encrypt, decrypt } from "./encryption.js";
 
-
 const bnplApi = axios.create({
   baseURL: process.env.BNPL_BASE_URL,
   timeout: 10000,
   headers: { "Content-Type": "application/json" },
 });
-
 
 async function sendPayLaterRequest(payload, retries = 3, xApiKey) {
   let lastError;
@@ -30,8 +28,32 @@ async function sendPayLaterRequest(payload, retries = 3, xApiKey) {
         await new Promise((res) => setTimeout(res, 1000 * attempt));
     }
   }
-  console.error("❌ All PayLater API retries failed, fallback triggered", payload);
+  console.error("❌ All PayLater API retries failed", payload);
   throw lastError;
+}
+
+async function updateShopifyOrder(shopDomain, accessToken, orderId, tags = [], note) {
+  try {
+    const { data } = await axios.get(
+      `https://${shopDomain}/admin/api/2025-10/orders/${orderId}.json`,
+      { headers: { "X-Shopify-Access-Token": accessToken } }
+    );
+
+    const existingTags = data?.order?.tags || "";
+    const mergedTags = Array.from(
+      new Set([...existingTags.split(",").map((t) => t.trim()).filter(Boolean), ...tags])
+    ).join(", ");
+
+    await axios.put(
+      `https://${shopDomain}/admin/api/2025-10/orders/${orderId}.json`,
+      { order: { id: orderId, tags: mergedTags, note } },
+      { headers: { "X-Shopify-Access-Token": accessToken } }
+    );
+
+    console.log(`✅ Shopify order updated for order ${orderId} (tags + note)`);
+  } catch (err) {
+    console.error(`⚠️ Failed to update Shopify order ${orderId}:`, err.response?.data || err.message);
+  }
 }
 
 export async function createPayLaterOrder({
@@ -44,68 +66,47 @@ export async function createPayLaterOrder({
   customerEmail = null,
   customerName = null,
 }) {
-  const merchant = await prisma.merchant.findFirst({
-    where: { paylaterMerchantId },
-  });
+  const merchant = await prisma.merchant.findFirst({ where: { paylaterMerchantId } });
   if (!merchant) throw new Error("Unknown merchant");
 
   const decryptedAccessToken = decrypt(merchant.accessToken);
-  const decryptedApiKey = merchant.paylaterApiKey
-    ? decrypt(merchant.paylaterApiKey)
-    : process.env.BNPL_API_KEY;
-  const xApiKey = decryptedApiKey;
+  const xApiKey = merchant.paylaterApiKey ? decrypt(merchant.paylaterApiKey) : process.env.BNPL_API_KEY;
 
   const parsedAmount = parseFloat(amount);
-  if (isNaN(parsedAmount) || parsedAmount <= 0)
-    throw new Error("Invalid amount");
+  if (isNaN(parsedAmount) || parsedAmount <= 0) throw new Error("Invalid amount");
 
   let order = await prisma.order.findFirst({
-    where: {
-      shopifyOrderId: String(shopifyOrderId),
-      merchantId: merchant.id,
-    },
+    where: { shopifyOrderId: String(shopifyOrderId), merchantId: merchant.id },
   });
 
   if (order) {
-    console.log(`🔁 Existing PayLater link reused for order ${shopifyOrderId}`);
-    return {
-      paymentUrl: decrypt(order.paymentLink),
-      paylaterOrderId: order.paylaterOrderId,
-    };
+    console.log(`🔁 Reusing existing PayLater link for order ${shopifyOrderId}`);
+    return { paymentUrl: decrypt(order.paymentLink), paylaterOrderId: order.paylaterOrderId };
   }
 
-  const uniqueOrderId = String(shopifyOrderId);
   const payload = {
     merchantId: paylaterMerchantId,
     outletId,
     currency: "QAR",
     amount: parsedAmount,
-    orderId: uniqueOrderId,
+    orderId: String(shopifyOrderId),
     successRedirectUrl,
     failRedirectUrl,
   };
 
   console.log("👉 Sending PayLater request:", payload);
 
-  let responseData;
-  try {
-    responseData = await sendPayLaterRequest(payload, 3, xApiKey);
-  } catch (err) {
-    console.error("❌ Failed to create PayLater order after retries:", err.message);
-    throw err;
-  }
-
+  const responseData = await sendPayLaterRequest(payload, 3, xApiKey);
   const paymentUrl = responseData.paymentLinkUrl;
-  const paylaterRef = responseData.paylaterRef || uniqueOrderId;
+  const paylaterRef = responseData.paylaterRef || String(shopifyOrderId);
+
   if (!paymentUrl) throw new Error("PayLater API returned no payment link");
 
   order = await prisma.order.create({
     data: {
-      shopifyOrderId: uniqueOrderId,
+      shopifyOrderId: String(shopifyOrderId),
       paylaterOrderId: paylaterRef,
-      merchant: {
-        connect: { id: merchant.id },
-      },
+      merchant: { connect: { id: merchant.id } },
       shopifyStatus: "pending",
       paylaterStatus: "pending",
       amount: parsedAmount,
@@ -116,7 +117,7 @@ export async function createPayLaterOrder({
     },
   });
 
-  console.log(`✅ PayLater order saved in DB for Shopify order ${shopifyOrderId}`);
+  console.log(`✅ PayLater order saved for Shopify order ${shopifyOrderId}`);
 
   if (customerEmail) {
     try {
@@ -132,55 +133,16 @@ export async function createPayLaterOrder({
           paymentLink: paymentUrl,
         },
       });
-      console.log(`✉️ PayLater email sent to ${customerEmail} for order ${shopifyOrderId}`);
+      console.log(`✉️ PayLater email sent to ${customerEmail}`);
     } catch (err) {
       console.error("❌ Failed to send PayLater email:", err.message);
     }
   }
 
-  try {
-    const shop = merchant.shop;
-    const accessToken = decryptedAccessToken;
-
-    try {
-      const shopResp = await axios.get(`https://${shop}/admin/api/2025-10/shop.json`, {
-        headers: { "X-Shopify-Access-Token": accessToken },
-      });
-      if (!shopResp?.data?.shop?.id) {
-        console.warn(`⚠️ Invalid Shopify access token for ${shop}, skipping tagging.`);
-        return { paymentUrl, paylaterOrderId: paylaterRef };
-      }
-    } catch (verifyErr) {
-      console.warn(
-        `⚠️ Failed to verify Shopify token for ${shop}:`,
-        verifyErr.response?.data || verifyErr.message
-      );
-      return { paymentUrl, paylaterOrderId: paylaterRef };
-    }
-
-    const { data } = await axios.get(
-      `https://${shop}/admin/api/2025-10/orders/${shopifyOrderId}.json`,
-      { headers: { "X-Shopify-Access-Token": accessToken } }
-    );
-
-    const shopifyOrder = data?.order;
-    const currentTags = shopifyOrder?.tags || "";
-    const newTags = currentTags.includes("PayLater")
-      ? currentTags
-      : currentTags
-        ? `${currentTags}, PayLater`
-        : "PayLater";
-
-    if (newTags !== currentTags) {
-      await axios.put(
-        `https://${shop}/admin/api/2025-10/orders/${shopifyOrderId}.json`,
-        { order: { id: shopifyOrderId, tags: newTags } },
-        { headers: { "X-Shopify-Access-Token": accessToken } }
-      );
-      console.log(`✅ Shopify tag 'PayLater' added for order ${shopifyOrderId}`);
-    }
-  } catch (tagErr) {
-    console.error("⚠️ Failed to add PayLater tag:", tagErr.response?.data || tagErr.message);
+  if (decryptedAccessToken) {
+    const shopDomain = merchant.shop;
+    const noteContent = `PayLater Payment Link: ${paymentUrl}`;
+    await updateShopifyOrder(shopDomain, decryptedAccessToken, shopifyOrderId, ["PayLater", "PaymentLinkSent"], noteContent);
   }
 
   return { paymentUrl, paylaterOrderId: paylaterRef };

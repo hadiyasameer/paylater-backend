@@ -51,4 +51,7 @@ model Order {
   lastWebhookId         String?
   createdAt             DateTime  @default(now())
   updatedAt             DateTime  @updatedAt
+
+    @@unique([shopifyOrderId, merchantId])
+
 }
