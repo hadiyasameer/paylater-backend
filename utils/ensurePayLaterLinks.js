@@ -1,5 +1,6 @@
 import { createPayLaterOrder } from "./paylaterClient.js";
 import { prisma, connectDb } from "./db.js";
+import { decrypt } from "./encryption.js";
 import crypto from "crypto";
 
 export default async function ensurePayLaterLink({
@@ -15,26 +16,20 @@ export default async function ensurePayLaterLink({
     const now = new Date();
     const webhookId = crypto.randomUUID();
 
-    const merchantFull = await prisma.merchant.findUnique({
-      where: { id: merchant.id },
-    });
-
+    const merchantFull = await prisma.merchant.findUnique({ where: { id: merchant.id } });
     if (!merchantFull) {
       console.error(`❌ Merchant not found for ID: ${merchant.id}`);
       return { paymentUrl: null, paylaterOrderId: null };
     }
 
     const existingOrder = await prisma.order.findFirst({
-      where: {
-        shopifyOrderId: String(shopifyOrderId),
-        merchantId: merchantFull.id,
-      },
+      where: { shopifyOrderId: String(shopifyOrderId), merchantId: merchantFull.id },
     });
 
     if (existingOrder?.paymentLink && existingOrder?.paylaterOrderId) {
       console.log(`🔁 Existing PayLater link reused for Shopify order ${shopifyOrderId}`);
       return {
-        paymentUrl: existingOrder.paymentLink,
+        paymentUrl: decrypt(existingOrder.paymentLink),
         paylaterOrderId: existingOrder.paylaterOrderId,
       };
     }
@@ -108,7 +103,7 @@ export default async function ensurePayLaterLink({
     }
 
     return {
-      paymentUrl: result.paymentUrl,
+      paymentUrl: decrypt(result.paymentUrl), 
       paylaterOrderId: result.paylaterOrderId,
     };
   } catch (err) {
